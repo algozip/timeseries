@@ -16,7 +16,7 @@ import (
 // compression. The caller must flush w. The format contains version, reserved,
 // length, exponent, start timestamp, step, and signed deltas of uint32 prices.
 func (ts *TimeSeries) BinaryEncode(w *bufio.Writer) error {
-	if ts == nil || ts.Step <= 0 || ts.Exp < -308 || ts.Exp > 308 {
+	if ts == nil || ts.Time0 < 0 || ts.Step <= 0 || ts.Exp < -308 || ts.Exp > 308 {
 		return errors.New("timeseries: invalid series metadata")
 	}
 	var buf [binary.MaxVarintLen64]byte
@@ -56,7 +56,7 @@ func (ts *TimeSeries) BinaryDecode(r *bufio.Reader) error {
 	if version != 0 || reserved != 0 {
 		return fmt.Errorf("timeseries: unsupported format version %d or reserved field %d", version, reserved)
 	}
-	if n < 0 || n > int64(math.MaxInt) || step <= 0 || exp < -308 || exp > 308 {
+	if n < 0 || n > int64(math.MaxInt) || time0 < 0 || step <= 0 || exp < -308 || exp > 308 {
 		return errors.New("timeseries: invalid series metadata")
 	}
 	if n > 0 && (n > math.MaxInt64/step || time0 > math.MaxInt64-n*step) {
@@ -78,7 +78,7 @@ func (ts *TimeSeries) BinaryDecode(r *bufio.Reader) error {
 		}
 		result.prices = append(result.prices, uint32(previous))
 	}
-	result.cur = max(0, len(result.prices)-1)
+	result.revision = ts.revision + 1
 	*ts = result
 	return nil
 }

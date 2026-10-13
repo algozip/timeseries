@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
-	"time"
 )
 
 // Period is a sampling interval in seconds.
@@ -46,48 +44,34 @@ func PeriodByString(s string) Period {
 	return Period(n * unit)
 }
 
-// Tick is a timestamped quote. Time is a Unix timestamp in seconds.
-// TimeSeries stores Ask only; returned ticks have equal Ask and Bid values.
-type Tick struct {
-	Time int64
-	Ask  float64
-	Bid  float64
+// PrecisionExp returns the original finance decimal exponent, ignoring
+// absolute floating-point differences of at most 1e-15. v must be finite.
+func PrecisionExp(v float64) (exp int) {
+	if v = abs(v); v != 0 {
+		exp = int(math.Floor(math.Log10(v)))
+		for abs(math.Round(v/Pow10(exp))/Pow10(-exp)-v) > 1e-15 {
+			exp--
+		}
+	}
+	return
 }
 
-// ShortString formats the timestamp in UTC and the price.
-func (t Tick) ShortString() string {
-	return fmt.Sprintf("[%s %g]", time.Unix(t.Time, 0).UTC().Format("2006-01-02 15:04:05"), t.Ask)
+var pow10 = [...]float64{
+	1e-20, 1e-19, 1e-18, 1e-17, 1e-16, 1e-15, 1e-14, 1e-13, 1e-12, 1e-11, 1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1,
+	1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20,
 }
 
-// Ticks is a slice of timestamped quotes.
-type Ticks []Tick
-
-// TimeSeries converts ticks to a fixed-interval series. Input must be ordered
-// by time. Gaps are filled with the previous price; the last tick in a bucket wins.
-func (ticks Ticks) TimeSeries(period Period) *TimeSeries {
-	exp := 0
-	for _, tick := range ticks {
-		exp = min(exp, PrecisionExp(tick.Ask))
+// Pow10 returns 10 raised to exp, using a table for exponents -20 through 20.
+func Pow10(exp int) float64 {
+	if exp >= -20 && exp <= 20 {
+		return pow10[exp+20]
 	}
-	ts := New(0, period, exp)
-	for _, tick := range ticks {
-		ts.Push(tick)
-	}
-	return ts
+	return math.Pow10(exp)
 }
 
-// PrecisionExp returns the decimal exponent of the shortest decimal
-// representation of v. Zero has exponent zero. Non-finite values panic.
-func PrecisionExp(v float64) int {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		panic("timeseries: price must be finite")
+func abs[T int | int32 | int64 | float32 | float64](v T) T {
+	if v < 0 {
+		return -v
 	}
-	if v == 0 {
-		return 0
-	}
-	s := strconv.FormatFloat(math.Abs(v), 'f', -1, 64)
-	if dot := strings.IndexByte(s, '.'); dot >= 0 {
-		return -(len(s) - dot - 1)
-	}
-	return len(s) - len(strings.TrimRight(s, "0"))
+	return v
 }

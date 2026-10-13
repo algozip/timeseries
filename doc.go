@@ -2,7 +2,9 @@
 // trading and backtesting. Prices are stored as uint32 values with a shared
 // decimal exponent; timestamps are derived from a start time and a fixed step.
 //
-// Times and periods use Unix seconds. A series stores one nonnegative price per
-// interval, not OHLCV bars or bid/ask spreads. Iteration updates the cursor used
-// by Avg. Series are not safe for concurrent mutation or cursor-based iteration.
+// Times are literal nonnegative Unix seconds; periods are durations in seconds.
+// A series stores one nonnegative value per interval. Series iteration is
+// stateless. A Cursor holds an independent position and moving-average caches
+// while sharing the series' data. Separate cursors may read immutable data
+// concurrently. Series mutation and sharing a cursor require synchronization.
 package timeseries
