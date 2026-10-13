@@ -23,15 +23,17 @@ func main() {
 	}
 	from := time.Unix(start+60, 0)
 	to := from.Add(2 * time.Minute)
-	for timestamp, price := range cursor.Range(from.Unix(), to.Unix()) {
-		fmt.Printf("Range: %d price=%.2f sma=%.4f\n", timestamp, price, cursor.Avg(3*timeseries.Period1m))
+	window := prices.Range(from.Unix(), to.Unix())
+	for timestamp, price := range window.All() {
+		fmt.Printf("Range: %d price=%.2f sma=%.4f\n", timestamp, price, window.Avg(3*timeseries.Period1m))
 	}
-	for timestamp, price := range prices.Tail(2 * timeseries.Period1m) {
+	fmt.Println("Range bounds:", window.StartIndex(), window.EndIndex())
+	for timestamp, price := range prices.Tail(2 * timeseries.Period1m).All() {
 		fmt.Printf("Tail: %d price=%.2f\n", timestamp, price)
 	}
-	fmt.Println("Cursor after stateless Tail:", cursor.Index())
+	fmt.Println("Original cursor after Tail:", cursor.Index())
 	other := prices.Cursor().SeekTime(prices.LastTime())
-	fmt.Println("Independent cursors:", cursor.Index(), other.Index())
+	fmt.Println("Independent cursors:", window.Index(), other.Index())
 
 	copy := prices.Slice(start+60, start+3*60)
 	copy.Push(start+60, 99.25)

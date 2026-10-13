@@ -199,7 +199,7 @@ func TestTimeSeries_RangeAndSlice(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assertSamples(t, ts.Range(tc.from, tc.to), tc.wantTimes, tc.wantValues)
+			assertSamples(t, ts.Range(tc.from, tc.to).All(), tc.wantTimes, tc.wantValues)
 			copy := ts.Slice(tc.from, tc.to)
 			assertSamples(t, copy.All(), tc.wantTimes, tc.wantValues)
 		})
@@ -217,9 +217,9 @@ func TestTimeSeries_Tail(t *testing.T) {
 		{2, []int64{t0 + 3, t0 + 4}, []float64{11.123, 12.123}},
 		{100, []int64{t0, t0 + 1, t0 + 2, t0 + 3, t0 + 4}, ts.Nums()},
 	} {
-		assertSamples(t, ts.Tail(tc.period), tc.times, tc.values)
-		cursor := ts.Cursor()
-		assertSamples(t, cursor.Tail(tc.period), tc.times, tc.values)
+		assertSamples(t, ts.Tail(tc.period).All(), tc.times, tc.values)
+		cursor := ts.Tail(tc.period)
+		assertSamples(t, cursor.All(), tc.times, tc.values)
 	}
 }
 
@@ -377,7 +377,7 @@ func TestTimeSeries_Empty(t *testing.T) {
 	assertEqual(t, ts.LastTime(), t0)
 	assertEqual(t, ts.ValueOf(t0), math.NaN())
 	assertSamples(t, ts.All(), nil, nil)
-	assertSamples(t, ts.Tail(10), nil, nil)
+	assertSamples(t, ts.Tail(10).All(), nil, nil)
 	assertEqual(t, ts.Slice(0, t0+10).Size(), 0)
 	assertEqual(t, ts.Reduce(2).Size(), 0)
 	var nilSeries *TimeSeries
@@ -399,9 +399,9 @@ func TestTimeSeries_InvalidInput(t *testing.T) {
 		"negative_lookup": func() {
 			newTestTimeSeries().ValueOf(-1)
 		},
-		"negative_range": func() { collect(newTestTimeSeries().Range(-1, t0)) },
+		"negative_range": func() { newTestTimeSeries().Range(-1, t0) },
 		"negative_slice": func() { newTestTimeSeries().Slice(t0, -1) },
-		"negative_tail":  func() { collect(newTestTimeSeries().Tail(-1)) },
+		"negative_tail":  func() { newTestTimeSeries().Tail(-1) },
 		"invalid_reduce": func() { seriesWithValues(t0, 2, 0, 1).Reduce(3) },
 		"merge_steps": func() {
 			newTestTimeSeries().Merge(seriesWithValues(t0, 2, 0, 1))

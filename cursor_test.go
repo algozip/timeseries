@@ -149,8 +149,12 @@ func TestCursor_IndependentTraversal(t *testing.T) {
 
 func TestCursor_Range(t *testing.T) {
 	ts := newTestTimeSeries()
-	cursor := ts.Cursor()
-	seq := cursor.Range(t0+2, t0+4)
+	cursor := ts.Range(t0+2, t0+4)
+	assertEqual(t, cursor.StartIndex(), 2)
+	assertEqual(t, cursor.EndIndex(), 4)
+	assertEqual(t, cursor.Index(), 2)
+	assertEqual(t, cursor.Value(), 10.123)
+	seq := cursor.All()
 	for range 2 {
 		visits := 0
 		for timestamp, _ := range seq {
@@ -162,14 +166,78 @@ func TestCursor_Range(t *testing.T) {
 		assertEqual(t, visits, 2)
 		assertEqual(t, cursor.Index(), 3)
 	}
-	for range cursor.Range(t0+1, t0+4) {
+	for range cursor.All() {
 		break
 	}
-	assertEqual(t, cursor.Index(), 1)
-	for range cursor.Range(0, 0) {
-		t.Fatal("zero bounds must be literal")
+	assertEqual(t, cursor.Index(), 2)
+	assertEqual(t, cursor.SeekIndex(0).Index(), 2)
+	assertEqual(t, cursor.SeekIndex(100).Index(), 3)
+	assertEqual(t, cursor.SeekTime(0).Index(), 2)
+	assertEqual(t, cursor.SeekTime(ts.NextTime()).Index(), 3)
+}
+
+func TestCursor_EmptyRange(t *testing.T) {
+	ts := newTestTimeSeries()
+	for _, tc := range []struct {
+		from, to int64
+		index    int
+	}{
+		{0, 0, 0},
+		{t0 + 2, t0 + 2, 2},
+		{t0 + 4, t0 + 1, 4},
+		{t0 + 10, t0 + 20, 5},
+	} {
+		cursor := ts.Range(tc.from, tc.to)
+		assertEqual(t, cursor.StartIndex(), tc.index)
+		assertEqual(t, cursor.EndIndex(), tc.index)
+		assertEqual(t, cursor.Index(), tc.index)
+		assertEqual(t, cursor.Time(), t0+int64(tc.index))
+		assertEqual(t, cursor.Value(), math.NaN())
+		assertEqual(t, cursor.Avg(1), math.NaN())
+		assertSamples(t, cursor.All(), nil, nil)
+		assertEqual(t, cursor.SeekIndex(0).Index(), tc.index)
+		assertEqual(t, cursor.SeekTime(ts.NextTime()).Index(), tc.index)
 	}
-	assertEqual(t, cursor.Index(), 1)
+}
+
+func TestCursor_FixedAndFullBounds(t *testing.T) {
+	ts := seriesWithValues(t0, Period1s, 0, 1, 2, 3)
+	bounded, tail, full := ts.Range(t0, t0+10), ts.Tail(2), ts.Cursor()
+	assertEqual(t, bounded.EndIndex(), 3)
+	assertEqual(t, tail.StartIndex(), 1)
+	assertEqual(t, tail.EndIndex(), 3)
+	assertEqual(t, full.EndIndex(), 3)
+	ts.Append(4)
+	assertEqual(t, bounded.EndIndex(), 3)
+	assertEqual(t, tail.EndIndex(), 3)
+	assertEqual(t, full.EndIndex(), 4)
+	assertSamples(t, bounded.All(), []int64{t0, t0 + 1, t0 + 2}, []float64{1, 2, 3})
+	assertSamples(t, tail.All(), []int64{t0 + 1, t0 + 2}, []float64{2, 3})
+	assertSamples(t, full.All(), []int64{t0, t0 + 1, t0 + 2, t0 + 3}, []float64{1, 2, 3, 4})
+	assertEqual(t, bounded.SeekTime(ts.LastTime()).Value(), 3.0)
+	assertEqual(t, full.SeekTime(ts.LastTime()).Value(), 4.0)
+
+	empty := New(t0, Period1s, 0)
+	emptyRange := empty.Range(t0, t0+10)
+	empty.Append(1)
+	assertSamples(t, emptyRange.All(), nil, nil)
+	assertEqual(t, emptyRange.Value(), math.NaN())
+}
+
+func TestCursor_BoundsAfterShorterReplacement(t *testing.T) {
+	ts := newTestTimeSeries()
+	cursor := ts.Range(t0+2, ts.NextTime()).SeekIndex(4)
+	assertEqual(t, cursor.Avg(3), 11.123)
+	data := encodeSeries(t, seriesWithValues(t0, Period1s, 0, 9))
+	if err := ts.BinaryDecode(bufio.NewReader(bytes.NewReader(data))); err != nil {
+		t.Fatal(err)
+	}
+	assertEqual(t, cursor.StartIndex(), 1)
+	assertEqual(t, cursor.EndIndex(), 1)
+	assertEqual(t, cursor.Value(), math.NaN())
+	assertEqual(t, cursor.Avg(1), math.NaN())
+	assertSamples(t, cursor.All(), nil, nil)
+	assertEqual(t, cursor.SeekIndex(0).Index(), 1)
 }
 
 func TestCursor_Seek(t *testing.T) {
@@ -255,8 +323,6 @@ func TestCursor_InvalidInput(t *testing.T) {
 		"negative_time":  func() { cursor.SeekTime(-1) },
 		"negative_index": func() { cursor.SeekIndex(-1) },
 		"negative_avg":   func() { cursor.Avg(-1) },
-		"negative_range": func() { collect(cursor.Range(-1, t0)) },
-		"negative_tail":  func() { collect(cursor.Tail(-1)) },
 	} {
 		t.Run(name, func(t *testing.T) { assertPanics(t, fn) })
 	}

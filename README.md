@@ -56,8 +56,8 @@ func main() {
 
 ## Series and cursors
 
-`TimeSeries` owns the data. Its `All`, `Range`, `Tail`, `Iterator`, and `Fetch`
-methods leave all cursors unchanged. Use these for stateless or nested traversal:
+`TimeSeries` owns the data. Its `All`, `Iterator`, and `Fetch` methods leave
+all cursors unchanged. Use these for stateless or nested traversal:
 
 ```go
 for timestamp, price := range prices.All() {
@@ -65,16 +65,22 @@ for timestamp, price := range prices.All() {
 }
 ```
 
-A `Cursor` references a series without copying values and keeps its own position
-and moving-average caches. New cursors start at sample zero. Create a separate
-cursor for each backtest, concurrent reader, or nested traversal that needs its
-own position:
+A `Cursor` references a series without copying values and keeps its own position,
+index bounds, and moving-average caches. `prices.Cursor()` creates a full-series
+cursor at sample zero; its end follows the current series length, including
+appended samples.
+
+Select a bounded cursor directly from the series with `Range(from, to)` or
+`Tail(period)`. Time boundaries are converted to absolute sample indices once,
+when the cursor is created. `StartIndex()` is inclusive and `EndIndex()` is
+exclusive. Fixed bounds do not grow when values are appended:
 
 ```go
-cursor := prices.Cursor()
+cursor := prices.Range(from.Unix(), to.Unix())
 other := prices.Cursor()
 
-for timestamp, price := range cursor.Range(from.Unix(), to.Unix()) {
+fmt.Println(cursor.StartIndex(), cursor.EndIndex())
+for timestamp, price := range cursor.All() {
     fmt.Println(timestamp, price, cursor.Avg(timeseries.Period1h))
     // Reading through other or prices.All() does not move cursor.
 }
@@ -83,10 +89,17 @@ other.SeekTime(prices.LastTime())
 fmt.Println(other.Index(), other.Time(), other.Value())
 ```
 
-`Cursor.All`, `Cursor.Range`, and `Cursor.Tail` update only that cursor before
-each yield. `break` leaves it on the last visited sample; an empty range leaves
-its position unchanged. Each traversal starts at the first matching sample.
-A single cursor must not be used for simultaneous or nested traversal.
+`Cursor.All()` visits only that cursor's range, updating its position before each
+yield. `Index()` is an absolute index into the original series. `SeekTime` and
+`SeekIndex` clamp to the cursor's range. An empty cursor has no current value,
+so `Value` and `Avg` return `NaN`. If the series becomes shorter, the available
+bounds are clamped to its new length.
+
+`break` leaves the cursor on the last visited sample; an empty traversal leaves
+its position unchanged. Each traversal starts at `StartIndex()`. Create a
+separate cursor for each backtest, concurrent reader, or nested traversal that
+needs its own position. A single cursor must not be used for simultaneous or
+nested traversal.
 
 `cursor.Avg(period)` uses `max(1, period / Step)` samples, returns `NaN` before a
 complete window is available, and includes earlier history outside a selected
@@ -111,19 +124,20 @@ There are no special timestamp sentinels: `0` means the Unix epoch, so
 `Clone()` for a full independent copy, and `Tail(period)` for recent data:
 
 ```go
-for timestamp, price := range prices.Range(from.Unix(), to.Unix()) {
+for timestamp, price := range prices.Range(from.Unix(), to.Unix()).All() {
     fmt.Println(timestamp, price)
 }
-for timestamp, price := range prices.Tail(timeseries.Period1h) {
+for timestamp, price := range prices.Tail(timeseries.Period1h).All() {
     fmt.Println(timestamp, price)
 }
 copy := prices.Slice(from.Unix(), to.Unix())
 ```
 
 Periods are durations in seconds. `Tail(0)` is empty; negative periods panic.
-`SeekTime` and `SeekIndex` clamp to the available samples, including when
-seeking beyond the last sample. Use `SeekTime(prices.LastTime())` to select the
-last sample, without negative sentinels.
+`SeekTime` and `SeekIndex` clamp to the cursor's available samples, including
+when seeking beyond its last sample. Use
+`prices.Cursor().SeekTime(prices.LastTime())` to select the series' last sample,
+without negative sentinels.
 
 ## Working with data
 
@@ -133,8 +147,9 @@ last sample, without negative sentinels.
 | `Push(timestamp, value)` | Store a value in its interval, automatically increasing precision and filling gaps with the previous value. |
 | `Append(value)` | Add at `NextTime()`, rounding to the current precision. |
 | `ValueOf(timestamp)` | Return the interval's value, or `math.NaN()` outside the series. |
-| `Cursor()` | Create an independent position and average caches over the same data. |
-| `All()`, `Range(from, to)`, `Tail(period)` | Return `iter.Seq2[int64, float64]` iterators without changing any cursor. |
+| `Cursor()` | Create a full-series cursor with an independent position and average caches; appended samples are visible. |
+| `All()` | Return a stateless `iter.Seq2[int64, float64]` over the complete series. |
+| `Range(from, to)`, `Tail(period)` | Create independent cursors with fixed start and end indices, without copying values. |
 | `Slice(from, to)` | Copy sample timestamps in `[from, to)` into independent storage. |
 | `Clone()` | Copy all metadata and values into independent storage. |
 | `Reduce(period)` | Copy the first sample of each larger interval, including a final partial interval. |
@@ -196,11 +211,22 @@ varint deltas of the `uint32` values, wrapped in gzip for file storage.
 Existing `.zi` files can be read directly or renamed to `.zts`; file extensions
 are not enforced by the reader or writer. Cursor state is never serialized.
 
+## Migration from v0.4
+
+`Range` and `Tail` now belong only to `TimeSeries` and return a bounded `*Cursor`.
+Replace `cursor.Range(from, to)` with `cursor := series.Range(from, to)` followed
+by a loop over `cursor.All()`. For a one-off loop, use
+`for timestamp, price := range series.Range(from, to).All()`.
+Likewise, use `series.Tail(period).All()` instead of ranging over `Tail` directly.
+`SeekTime` and `SeekIndex` stay inside a bounded cursor's range; `Avg` still
+includes earlier series history. `series.Cursor()` retains full-series behavior
+and sees newly appended samples.
+
 ## Migration from v0.3
 
 - Replace `Push(Tick{Time: t, Ask: p})` with `Push(t, p)`.
 - Create `cursor := series.Cursor()` and move `Avg` and `SeekTime` calls to it.
-- Use `cursor.All()` or `cursor.Range(...)` when the loop needs a moving cursor.
+- Iterate `cursor.All()`; select bounded cursors with `series.Range(...)`.
 - Replace negative timestamps with explicit bounds or `Tail(period)`.
 - Replace zero end-bound sentinels with `NextTime()`, or use `All()`.
 - `Slice` now copies values; `CleanCopy` has been removed in favor of cursors.

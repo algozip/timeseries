@@ -347,20 +347,10 @@ func (ts *TimeSeries) Nums() []float64 {
 // mutate the series. Breaking the loop stops iteration.
 func (ts *TimeSeries) All() iter.Seq2[int64, float64] {
 	return func(yield func(int64, float64) bool) {
-		ts.Range(ts.Time0, ts.NextTime())(yield)
-	}
-}
-
-// Range iterates sample timestamps in [from, to). Bounds are literal
-// nonnegative Unix seconds: zero is the Unix epoch, not an open bound.
-// Bounds outside the series are clamped; empty or reversed ranges yield
-// nothing. Iteration leaves all cursors unchanged. The loop body must not
-// mutate the series. Breaking the loop stops iteration.
-func (ts *TimeSeries) Range(from, to int64) iter.Seq2[int64, float64] {
-	return func(yield func(int64, float64) bool) {
-		start, end := ts.rangeIndices(from, to)
+		ts.validate()
 		scale, exp, step := ts.scale(), ts.Exp, ts.Step
-		for i, t := start, ts.Time0+int64(start)*step; i < end; i, t = i+1, t+step {
+		end := ts.Size()
+		for i, t := 0, ts.Time0; i < end; i, t = i+1, t+step {
 			if !yield(t, decodeValue(ts.prices[i], exp, scale)) {
 				return
 			}
@@ -368,13 +358,23 @@ func (ts *TimeSeries) Range(from, to int64) iter.Seq2[int64, float64] {
 	}
 }
 
-// Tail iterates the last period seconds, using the same [from, to) semantics
-// as Range. A zero period yields nothing; a negative period panics. Iteration
-// leaves all cursors unchanged. The loop body must not mutate the series.
-func (ts *TimeSeries) Tail(period Period) iter.Seq2[int64, float64] {
-	return func(yield func(int64, float64) bool) {
-		ts.Range(ts.tailStart(period), ts.NextTime())(yield)
-	}
+// Range creates an independent cursor for sample timestamps in [from, to).
+// Bounds are literal nonnegative Unix seconds: zero is the Unix epoch, not
+// an open bound. Bounds outside the series are clamped; empty or reversed
+// ranges create empty cursors. Index bounds are fixed at creation and do not
+// grow when samples are appended. Iterate with cursor.All(). No values are
+// copied, and existing cursors are unchanged.
+func (ts *TimeSeries) Range(from, to int64) *Cursor {
+	start, end := ts.rangeIndices(from, to)
+	return ts.newCursor(start, end)
+}
+
+// Tail creates an independent cursor for the last period seconds, using the
+// same [from, to) semantics as Range. Its bounds are fixed at creation. A zero
+// period creates an empty cursor; a negative period panics. Iterate with
+// cursor.All(). No values are copied, and existing cursors are unchanged.
+func (ts *TimeSeries) Tail(period Period) *Cursor {
+	return ts.Range(ts.tailStart(period), ts.NextTime())
 }
 
 // Iterator visits all samples until fn returns false. It leaves all cursors
@@ -393,7 +393,7 @@ func (ts *TimeSeries) Fetch(fn func(int64, float64)) {
 // nonnegative Unix seconds as Range. It leaves all cursors unchanged.
 // The callback must not mutate the series.
 func (ts *TimeSeries) FetchFromTo(from, to int64, fn func(int64, float64)) {
-	for timestamp, value := range ts.Range(from, to) {
+	for timestamp, value := range ts.Range(from, to).All() {
 		fn(timestamp, value)
 	}
 }
