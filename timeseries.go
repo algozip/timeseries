@@ -2,6 +2,7 @@ package timeseries
 
 import (
 	"fmt"
+	"iter"
 	"math"
 	"slices"
 )
@@ -389,6 +390,14 @@ func (ts *TimeSeries) Nums() []float64 {
 		values[i] = ts.value(i)
 	}
 	return values
+}
+
+// All returns an iterator over timestamp-price pairs in time order. The cursor
+// is updated before each yield, so Avg can be used inside the loop. Breaking
+// the loop stops iteration. Each traversal starts at the first sample.
+// The loop body must not change the series' data or metadata.
+func (ts *TimeSeries) All() iter.Seq2[int64, float64] {
+	return ts.Iterator
 }
 
 // Iterator visits samples in time order and updates the cursor before each

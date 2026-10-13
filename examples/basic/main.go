@@ -16,7 +16,7 @@ func main() {
 	prices.Append(101.50)
 	prices.Push(timeseries.Tick{Time: start + 3*60, Ask: 102.75})
 
-	for timestamp, price := range prices.Iterator {
+	for timestamp, price := range prices.All() {
 		fmt.Printf("%d price=%.2f sma=%.4f\n", timestamp, price, prices.Avg(3*60))
 	}
 

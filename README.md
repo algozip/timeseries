@@ -35,7 +35,7 @@ func main() {
     prices.Push(timeseries.Tick{Time: start + 3*60, Ask: 102.75})
     // The missing third minute repeats 101.50.
 
-    for timestamp, price := range prices.Iterator {
+    for timestamp, price := range prices.All() {
         fmt.Printf("%d price=%.2f sma=%.4f\n", timestamp, price, prices.Avg(3*60))
     }
     // The average is NaN until three samples are available.
@@ -58,6 +58,7 @@ func main() {
 | `New(time0, period, exp)` | Create an empty series; align the start down to the period boundary. |
 | `Append(price)` | Add at `NextTime()`, rounding to the current precision. |
 | `Push(tick)` | Store `tick.Ask` in its interval; fill gaps with the preceding price and increase precision when needed. |
+| `All()` | Return an `iter.Seq2[int64, float64]` for ranging over timestamp-price pairs. |
 | `ValueOf(timestamp)` | Return the interval's price, or `math.NaN()` outside the series. |
 | `SeekTime(timestamp).Avg(seconds)` | Calculate a trailing simple moving average at the selected cursor. |
 | `Slice(from, to)` | Select sample timestamps in `[from, to)` as a shared, read-only view. |
@@ -79,6 +80,11 @@ before modifying it.
 and returns `NaN` before a complete window is available. Sequential cursor movement
 reuses cached running sums. Iteration and `Fetch` update the cursor before calling
 your function, so `Avg` is available inside a backtest loop.
+
+`All()` returns a standard `iter.Seq2[int64, float64]`. Each traversal starts at
+the first sample; `break` stops iteration and leaves the cursor on the last
+visited sample. The existing `Iterator` callback method also supports ranging
+directly with `for timestamp, price := range prices.Iterator`.
 
 `FetchMergedTimeSeries` requires matching steps and interval alignment. It leaves
 the input slice intact and reuses its callback's price slice; copy that slice if
