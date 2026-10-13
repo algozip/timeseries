@@ -120,7 +120,7 @@ func TestTimeSeries_BinaryDecodeRejectsInvalidInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ts := newTestTimeSeries()
 			before := ts.Clone()
-			cursor := ts.Cursor().SeekIndex(4)
+			cursor := ts.Cursor().Seek(t0 + 4)
 			assertEqual(t, cursor.Avg(3), 11.123)
 			if err := ts.BinaryDecode(bufio.NewReader(bytes.NewReader(data))); err == nil {
 				t.Fatal("expected a decoding error")

@@ -80,31 +80,22 @@ func (c *Cursor) Value() float64 {
 	return c.series.value(c.index)
 }
 
-// SeekTime moves to the interval containing a literal nonnegative Unix
-// timestamp, clamped to this cursor's range. An empty cursor stays at its
+// Seek moves to the interval containing a literal nonnegative Unix timestamp
+// in seconds, clamped to this cursor's range. An empty cursor stays at its
 // starting boundary index.
-func (c *Cursor) SeekTime(timestamp int64) *Cursor {
+func (c *Cursor) Seek(timestamp int64) *Cursor {
 	ts := c.series
 	ts.validate()
 	if timestamp < 0 {
 		panic("timeseries: timestamp must be nonnegative")
 	}
-	if timestamp <= ts.Time0 {
-		return c.SeekIndex(0)
-	}
-	if timestamp >= ts.NextTime() {
-		return c.SeekIndex(ts.Size())
-	}
-	return c.SeekIndex(int((timestamp - ts.Time0) / ts.Step))
-}
-
-// SeekIndex moves to a nonnegative absolute sample index, clamped to this
-// cursor's range. An empty cursor stays at its starting boundary index.
-func (c *Cursor) SeekIndex(index int) *Cursor {
-	if index < 0 {
-		panic("timeseries: cursor index must be nonnegative")
-	}
 	start, end := c.bounds()
+	index := start
+	if timestamp >= ts.NextTime() {
+		index = end - 1
+	} else if timestamp > ts.Time0 {
+		index = int((timestamp - ts.Time0) / ts.Step)
+	}
 	c.index = max(start, min(index, end-1))
 	return c
 }

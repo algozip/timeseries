@@ -93,7 +93,7 @@ func TestTimeSeries_Append(t *testing.T) {
 
 func TestTimeSeries_Fetch(t *testing.T) {
 	ts := newTestTimeSeries()
-	cursor := ts.Cursor().SeekIndex(2)
+	cursor := ts.Cursor().Seek(t0 + 2)
 	var times []int64
 	var values []float64
 	ts.Fetch(func(timestamp int64, value float64) {
@@ -257,7 +257,7 @@ func TestTimeSeries_SliceExcludesLaterAppends(t *testing.T) {
 func TestTimeSeries_Reduce(t *testing.T) {
 	const start = t0 + 3
 	ts := seriesWithValues(start, 10, 0, 10, 20, 30, 40, 50)
-	cursor := ts.Cursor().SeekIndex(4)
+	cursor := ts.Cursor().Seek(ts.LastTime())
 	reduced := ts.Reduce(20)
 	assertEqual(t, reduced.Time0, start)
 	assertEqual(t, reduced.Step, int64(20))
@@ -349,7 +349,7 @@ func TestTimeSeries_FetchMerged(t *testing.T) {
 	const start = t0 + 3
 	first := seriesWithValues(start, 10, 0, 1, 2, 3, 4, 5)
 	second := seriesWithValues(start+10, 10, 1, 20, 30, 40)
-	c1, c2 := first.Cursor().SeekIndex(1), second.Cursor()
+	c1, c2 := first.Cursor().Seek(start+10), second.Cursor()
 	series := []*TimeSeries{first, second}
 	var times []int64
 	var values [][]float64

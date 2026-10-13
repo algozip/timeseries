@@ -16,13 +16,13 @@ func TestCursor_Avg(t *testing.T) {
 	assertEqual(t, cursor.Value(), 10.123)
 	assertEqual(t, cursor.Avg(2), math.NaN())
 
-	cursor.SeekTime(ts.LastTime())
+	cursor.Seek(ts.LastTime())
 	for range 2 {
 		assertEqual(t, cursor.Avg(100), math.NaN())
 		assertEqual(t, cursor.Avg(3), 11.123)
 	}
 
-	cursor.SeekTime(0)
+	cursor.Seek(0)
 	assertEqual(t, cursor.Index(), 0)
 	assertEqual(t, cursor.Avg(1), 10.123)
 	assertEqual(t, cursor.Avg(2), math.NaN())
@@ -63,12 +63,12 @@ func TestCursor_AvgAfterAppendAndPush(t *testing.T) {
 	} {
 		t.Run(appendValue.name, func(t *testing.T) {
 			ts := newTestTimeSeries()
-			cursor := ts.Cursor().SeekTime(ts.LastTime())
+			cursor := ts.Cursor().Seek(ts.LastTime())
 			assertEqual(t, cursor.Avg(3), 11.123)
 			appendValue.fn(ts)
 			assertEqual(t, cursor.Index(), 4)
 			assertEqual(t, cursor.Avg(3), 11.123)
-			cursor.SeekTime(ts.LastTime())
+			cursor.Seek(ts.LastTime())
 			assertEqual(t, cursor.Avg(3), 12.123)
 			assertEqual(t, cursor.Avg(3), 12.123)
 		})
@@ -77,12 +77,12 @@ func TestCursor_AvgAfterAppendAndPush(t *testing.T) {
 
 func TestCursor_AvgAfterStorageGrowth(t *testing.T) {
 	ts := seriesWithValues(t0, Period1s, 0, 1, 2, 3)
-	cursor := ts.Cursor().SeekIndex(2)
+	cursor := ts.Cursor().Seek(t0 + 2)
 	assertEqual(t, cursor.Avg(3), 2.0)
 	for value := 4; value <= 1024; value++ {
 		ts.Append(float64(value))
 	}
-	cursor.SeekTime(ts.LastTime())
+	cursor.Seek(ts.LastTime())
 	assertEqual(t, cursor.Avg(3), 1023.0)
 }
 
@@ -116,7 +116,7 @@ func TestCursor_AvgInvalidation(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			ts := newTestTimeSeries()
-			first, second := ts.Cursor().SeekIndex(4), ts.Cursor().SeekIndex(4)
+			first, second := ts.Cursor().Seek(t0+4), ts.Cursor().Seek(t0+4)
 			assertEqual(t, first.Avg(3), 11.123)
 			assertEqual(t, second.Avg(3), 11.123)
 			mutate(t, ts)
@@ -170,10 +170,8 @@ func TestCursor_Range(t *testing.T) {
 		break
 	}
 	assertEqual(t, cursor.Index(), 2)
-	assertEqual(t, cursor.SeekIndex(0).Index(), 2)
-	assertEqual(t, cursor.SeekIndex(100).Index(), 3)
-	assertEqual(t, cursor.SeekTime(0).Index(), 2)
-	assertEqual(t, cursor.SeekTime(ts.NextTime()).Index(), 3)
+	assertEqual(t, cursor.Seek(0).Index(), 2)
+	assertEqual(t, cursor.Seek(ts.NextTime()).Index(), 3)
 }
 
 func TestCursor_EmptyRange(t *testing.T) {
@@ -195,8 +193,8 @@ func TestCursor_EmptyRange(t *testing.T) {
 		assertEqual(t, cursor.Value(), math.NaN())
 		assertEqual(t, cursor.Avg(1), math.NaN())
 		assertSamples(t, cursor.All(), nil, nil)
-		assertEqual(t, cursor.SeekIndex(0).Index(), tc.index)
-		assertEqual(t, cursor.SeekTime(ts.NextTime()).Index(), tc.index)
+		assertEqual(t, cursor.Seek(0).Index(), tc.index)
+		assertEqual(t, cursor.Seek(ts.NextTime()).Index(), tc.index)
 	}
 }
 
@@ -214,8 +212,8 @@ func TestCursor_FixedAndFullBounds(t *testing.T) {
 	assertSamples(t, bounded.All(), []int64{t0, t0 + 1, t0 + 2}, []float64{1, 2, 3})
 	assertSamples(t, tail.All(), []int64{t0 + 1, t0 + 2}, []float64{2, 3})
 	assertSamples(t, full.All(), []int64{t0, t0 + 1, t0 + 2, t0 + 3}, []float64{1, 2, 3, 4})
-	assertEqual(t, bounded.SeekTime(ts.LastTime()).Value(), 3.0)
-	assertEqual(t, full.SeekTime(ts.LastTime()).Value(), 4.0)
+	assertEqual(t, bounded.Seek(ts.LastTime()).Value(), 3.0)
+	assertEqual(t, full.Seek(ts.LastTime()).Value(), 4.0)
 
 	empty := New(t0, Period1s, 0)
 	emptyRange := empty.Range(t0, t0+10)
@@ -226,7 +224,7 @@ func TestCursor_FixedAndFullBounds(t *testing.T) {
 
 func TestCursor_BoundsAfterShorterReplacement(t *testing.T) {
 	ts := newTestTimeSeries()
-	cursor := ts.Range(t0+2, ts.NextTime()).SeekIndex(4)
+	cursor := ts.Range(t0+2, ts.NextTime()).Seek(t0 + 4)
 	assertEqual(t, cursor.Avg(3), 11.123)
 	data := encodeSeries(t, seriesWithValues(t0, Period1s, 0, 9))
 	if err := ts.BinaryDecode(bufio.NewReader(bytes.NewReader(data))); err != nil {
@@ -237,7 +235,7 @@ func TestCursor_BoundsAfterShorterReplacement(t *testing.T) {
 	assertEqual(t, cursor.Value(), math.NaN())
 	assertEqual(t, cursor.Avg(1), math.NaN())
 	assertSamples(t, cursor.All(), nil, nil)
-	assertEqual(t, cursor.SeekIndex(0).Index(), 1)
+	assertEqual(t, cursor.Seek(0).Index(), 1)
 }
 
 func TestCursor_Seek(t *testing.T) {
@@ -251,12 +249,12 @@ func TestCursor_Seek(t *testing.T) {
 		{0, 0}, {start, 0}, {start + 9, 0}, {start + 10, 1},
 		{start + 29, 2}, {start + 30, 2}, {start + 100, 2},
 	} {
-		assertEqual(t, cursor.SeekTime(tc.time), cursor)
+		assertEqual(t, cursor.Seek(tc.time), cursor)
 		assertEqual(t, cursor.Index(), tc.index)
 		assertEqual(t, cursor.Time(), start+int64(tc.index)*10)
 	}
-	assertEqual(t, cursor.SeekIndex(1).Value(), 20.0)
-	assertEqual(t, cursor.SeekIndex(100).Index(), 2)
+	assertEqual(t, cursor.Seek(start+10).Value(), 20.0)
+	assertEqual(t, cursor.Seek(start+100).Index(), 2)
 	assertEqual(t, cursor.Avg(19), 30.0)
 	assertEqual(t, cursor.Avg(0), 30.0)
 }
@@ -269,12 +267,11 @@ func TestCursor_EmptyAndShorterReplacement(t *testing.T) {
 	assertEqual(t, cursor.Value(), math.NaN())
 	assertEqual(t, cursor.Avg(1), math.NaN())
 	assertSamples(t, cursor.All(), nil, nil)
-	assertEqual(t, cursor.SeekTime(t0+100).Index(), 0)
-	assertEqual(t, cursor.SeekIndex(100).Index(), 0)
+	assertEqual(t, cursor.Seek(t0+100).Index(), 0)
 
 	ts.Append(1)
 	ts.Append(2)
-	cursor.SeekIndex(1)
+	cursor.Seek(t0 + 1)
 	assertEqual(t, cursor.Avg(2), 1.5)
 	var data bytes.Buffer
 	w := bufio.NewWriter(&data)
@@ -290,7 +287,7 @@ func TestCursor_EmptyAndShorterReplacement(t *testing.T) {
 	}
 	assertEqual(t, cursor.Value(), math.NaN())
 	assertEqual(t, cursor.Avg(1), math.NaN())
-	assertEqual(t, cursor.SeekIndex(0).Value(), 9.0)
+	assertEqual(t, cursor.Seek(0).Value(), 9.0)
 	assertEqual(t, cursor.Avg(1), 9.0)
 }
 
@@ -320,9 +317,8 @@ func TestCursor_ConcurrentReaders(t *testing.T) {
 func TestCursor_InvalidInput(t *testing.T) {
 	cursor := newTestTimeSeries().Cursor()
 	for name, fn := range map[string]func(){
-		"negative_time":  func() { cursor.SeekTime(-1) },
-		"negative_index": func() { cursor.SeekIndex(-1) },
-		"negative_avg":   func() { cursor.Avg(-1) },
+		"negative_time": func() { cursor.Seek(-1) },
+		"negative_avg":  func() { cursor.Avg(-1) },
 	} {
 		t.Run(name, func(t *testing.T) { assertPanics(t, fn) })
 	}

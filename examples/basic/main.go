@@ -32,7 +32,7 @@ func main() {
 		fmt.Printf("Tail: %d price=%.2f\n", timestamp, price)
 	}
 	fmt.Println("Original cursor after Tail:", cursor.Index())
-	other := prices.Cursor().SeekTime(prices.LastTime())
+	other := prices.Cursor().Seek(prices.LastTime())
 	fmt.Println("Independent cursors:", window.Index(), other.Index())
 
 	copy := prices.Slice(start+60, start+3*60)
@@ -48,7 +48,7 @@ func main() {
 	incoming.Push(start+3*60, 103.25)
 	incoming.Push(start+5*60, 104.50)
 	prices.Merge(incoming)
-	cursor.SeekTime(start + 3*60)
+	cursor.Seek(start + 3*60)
 	fmt.Println("Merged:", prices.Nums(), "sma:", cursor.Avg(3*timeseries.Period1m))
 
 	fraction := 0.1

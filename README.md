@@ -85,15 +85,15 @@ for timestamp, price := range cursor.All() {
     // Reading through other or prices.All() does not move cursor.
 }
 
-other.SeekTime(prices.LastTime())
+other.Seek(prices.LastTime())
 fmt.Println(other.Index(), other.Time(), other.Value())
 ```
 
 `Cursor.All()` visits only that cursor's range, updating its position before each
-yield. `Index()` is an absolute index into the original series. `SeekTime` and
-`SeekIndex` clamp to the cursor's range. An empty cursor has no current value,
-so `Value` and `Avg` return `NaN`. If the series becomes shorter, the available
-bounds are clamped to its new length.
+yield. `Index()` is an absolute index into the original series. `Seek` clamps
+to the cursor's range. An empty cursor has no current value, so `Value` and `Avg`
+return `NaN`. If the series becomes shorter, the available bounds are clamped
+to its new length.
 
 `break` leaves the cursor on the last visited sample; an empty traversal leaves
 its position unchanged. Each traversal starts at `StartIndex()`. Create a
@@ -117,7 +117,7 @@ All timestamps and range bounds are **literal nonnegative Unix seconds**.
 Convert `time.Time` values with `.Unix()`. Every range uses `[from, to)`: start
 inclusive, end exclusive. Bounds outside the series are clamped. Unaligned
 bounds select only sample timestamps inside the requested range. Empty or
-reversed ranges produce no samples. Negative timestamps and indices panic.
+reversed ranges produce no samples. Negative timestamps panic.
 
 There are no special timestamp sentinels: `0` means the Unix epoch, so
 `Range(0, 0)` and `Slice(0, 0)` are empty. Use `All()` for the complete series,
@@ -134,9 +134,9 @@ copy := prices.Slice(from.Unix(), to.Unix())
 ```
 
 Periods are durations in seconds. `Tail(0)` is empty; negative periods panic.
-`SeekTime` and `SeekIndex` clamp to the cursor's available samples, including
+`Seek` clamps to the cursor's available samples, including
 when seeking beyond its last sample. Use
-`prices.Cursor().SeekTime(prices.LastTime())` to select the series' last sample,
+`prices.Cursor().Seek(prices.LastTime())` to select the series' last sample,
 without negative sentinels.
 
 ## Working with data
@@ -211,6 +211,23 @@ varint deltas of the `uint32` values, wrapped in gzip for file storage.
 File extensions are not enforced by the reader or writer. Cursor state is never
 serialized.
 
+## Validation
+
+```sh
+go test -race ./...
+go vet -stdmethods=false ./...
+```
+
+`Cursor.Seek(timestamp)` uses Unix seconds. The `stdmethods` vet analyzer expects
+the `io.Seeker` signature for methods named `Seek`, so it is disabled for this
+API. All other vet analyzers remain enabled.
+
+## Migration from v0.5
+
+Cursor seeking now uses a single timestamp-based method: `cursor.Seek(timestamp)`.
+It stays within the cursor's index bounds and returns the cursor for chaining.
+There is no public method for seeking by sample index.
+
 ## Migration from v0.4
 
 `Range` and `Tail` now belong only to `TimeSeries` and return a bounded `*Cursor`.
@@ -218,14 +235,14 @@ Replace `cursor.Range(from, to)` with `cursor := series.Range(from, to)` followe
 by a loop over `cursor.All()`. For a one-off loop, use
 `for timestamp, price := range series.Range(from, to).All()`.
 Likewise, use `series.Tail(period).All()` instead of ranging over `Tail` directly.
-`SeekTime` and `SeekIndex` stay inside a bounded cursor's range; `Avg` still
+`Seek` stays inside a bounded cursor's range; `Avg` still
 includes earlier series history. `series.Cursor()` retains full-series behavior
 and sees newly appended samples.
 
 ## Migration from v0.3
 
 - Replace `Push(Tick{Time: t, Ask: p})` with `Push(t, p)`.
-- Create `cursor := series.Cursor()` and move `Avg` and `SeekTime` calls to it.
+- Create `cursor := series.Cursor()` and move `Avg` and `Seek` calls to it.
 - Iterate `cursor.All()`; select bounded cursors with `series.Range(...)`.
 - Replace negative timestamps with explicit bounds or `Tail(period)`.
 - Replace zero end-bound sentinels with `NextTime()`, or use `All()`.
