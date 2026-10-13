@@ -208,8 +208,8 @@ original `finance.TimeSeries`: six signed varints (version `0`, reserved `0`,
 sample count, decimal exponent, start timestamp, and step), followed by signed
 varint deltas of the `uint32` values, wrapped in gzip for file storage.
 
-Existing `.zi` files can be read directly or renamed to `.zts`; file extensions
-are not enforced by the reader or writer. Cursor state is never serialized.
+File extensions are not enforced by the reader or writer. Cursor state is never
+serialized.
 
 ## Migration from v0.4
 

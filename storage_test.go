@@ -63,7 +63,7 @@ func TestTimeSeries_BinaryFormatCompatibility(t *testing.T) {
 	assertValues(t, decoded.Nums(), []float64{123.45, 123, 123.50})
 	assertEqual(t, decoded.Cursor().Index(), 0)
 
-	filename := filepath.Join(t.TempDir(), "original.zi")
+	filename := filepath.Join(t.TempDir(), "original.zts")
 	if err := os.WriteFile(filename, gzipBytes(t, fixture), 0o600); err != nil {
 		t.Fatal(err)
 	}
