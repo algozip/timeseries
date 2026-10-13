@@ -1,4 +1,4 @@
 .DS_Store
-*.zi
+*.zts
 *.test
 coverage.out

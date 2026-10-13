@@ -40,10 +40,10 @@ func main() {
     }
     // The average is NaN until three samples are available.
 
-    if err := prices.WriteToFile("prices.zi"); err != nil {
+    if err := prices.WriteToFile("prices.zts"); err != nil {
         log.Fatal(err)
     }
-    restored, err := timeseries.TimeSeriesRead("prices.zi")
+    restored, err := timeseries.TimeSeriesRead("prices.zts")
     if err != nil {
         log.Fatal(err)
     }
@@ -109,10 +109,13 @@ replacing the destination. `TimeSeriesRead` validates the format and gzip
 checksum. `BinaryEncode` and `BinaryDecode` expose the uncompressed format through
 buffered readers and writers; callers must flush the writer.
 
-The `.zi` format remains compatible with the original `finance.TimeSeries`:
+The `.zts` format remains compatible with the original `finance.TimeSeries`:
 six signed varints (version `0`, reserved `0`, sample count, decimal exponent,
 start timestamp, and step), followed by signed varint deltas of the `uint32`
 prices, all wrapped in gzip for file storage.
+
+Existing `.zi` files can be read directly or renamed to `.zts`; the binary format
+is unchanged, and file extensions are not enforced by the reader or writer.
 
 ## Origin
 

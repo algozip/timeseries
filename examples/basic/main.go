@@ -25,7 +25,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer os.RemoveAll(dir)
-	filename := filepath.Join(dir, "prices.zi")
+	filename := filepath.Join(dir, "prices.zts")
 	if err := prices.WriteToFile(filename); err != nil {
 		log.Fatal(err)
 	}

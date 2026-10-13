@@ -83,7 +83,7 @@ func (ts *TimeSeries) BinaryDecode(r *bufio.Reader) error {
 	return nil
 }
 
-// WriteToFile writes a gzip-compressed .zi file. Parent directories are created
+// WriteToFile writes a gzip-compressed .zts file. Parent directories are created
 // as needed. The file is replaced by renaming a completed temporary file in the
 // same directory, so encoding failures do not overwrite existing data.
 func (ts *TimeSeries) WriteToFile(filename string) error {
@@ -122,7 +122,7 @@ func (ts *TimeSeries) WriteToFile(filename string) error {
 	return os.Rename(f.Name(), filename)
 }
 
-// TimeSeriesRead reads a gzip-compressed .zi file and verifies its checksum.
+// TimeSeriesRead reads a gzip-compressed .zts file and verifies its checksum.
 // It accepts files written by the original finance.TimeSeries implementation.
 func TimeSeriesRead(filename string) (*TimeSeries, error) {
 	f, err := os.Open(filename)
