@@ -11,56 +11,40 @@ import (
 )
 
 func main() {
-	const start int64 = 1700000100
-	prices := timeseries.New(0, timeseries.Period1m, -2)
+	start := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+	prices := timeseries.New(start, time.Minute, -2)
 	prices.Push(start, 100.25)
 	prices.Append(101.50)
-	prices.Push(start+3*60, 102.75)
+	prices.Push(start.Add(3*time.Minute), 102.75)
 
 	cursor := prices.Cursor()
 	for timestamp, price := range cursor.All() {
-		fmt.Printf("%d price=%.2f sma=%.4f\n", timestamp, price, cursor.Avg(3*timeseries.Period1m))
+		fmt.Printf("%s price=%.2f sma=%.4f\n", timestamp.Format(time.RFC3339Nano), price, cursor.Avg(3*time.Minute))
 	}
-	from := time.Unix(start+60, 0)
-	to := from.Add(2 * time.Minute)
-	window := prices.Range(from.Unix(), to.Unix())
-	for timestamp, price := range window.All() {
-		fmt.Printf("Range: %d price=%.2f sma=%.4f\n", timestamp, price, window.Avg(3*timeseries.Period1m))
+	window := prices.Range(start.Add(time.Minute), start.Add(3*time.Minute))
+	for timestamp, price := range window.AllUnix() {
+		fmt.Printf("Unix range: %d price=%.2f sma=%.4f\n", timestamp, price, window.Avg(3*time.Minute))
 	}
 	fmt.Println("Range bounds:", window.StartIndex(), window.EndIndex())
-	for timestamp, price := range prices.Tail(2 * timeseries.Period1m).All() {
-		fmt.Printf("Tail: %d price=%.2f\n", timestamp, price)
+	for timestamp, price := range prices.Tail(2 * time.Minute).All() {
+		fmt.Printf("Tail: %s price=%.2f\n", timestamp.Format(time.RFC3339Nano), price)
 	}
-	fmt.Println("Original cursor after Tail:", cursor.Index())
-	other := prices.Cursor().Seek(prices.LastTime())
-	fmt.Println("Independent cursors:", window.Index(), other.Index())
+	fmt.Println("Metadata:", prices.StartTime(), prices.Step(), prices.Duration())
 
-	copy := prices.Slice(start+60, start+3*60)
-	copy.Push(start+60, 99.25)
-	fmt.Println("Copied range:", copy.Nums())
-	fmt.Println("Original:", prices.Nums())
+	copy := prices.Slice(start.Add(time.Minute), start.Add(3*time.Minute))
+	copy.Push(copy.StartTime(), 99.25)
+	fmt.Println("Copied range:", copy.Nums(), "original:", prices.Nums())
 
-	reduced := prices.Reduce(2 * timeseries.Period1m)
+	reduced := prices.Reduce(2 * time.Minute)
 	reduced.Push(reduced.NextTime(), 103.50)
 	fmt.Println("Reduced:", reduced.Nums(), "cursor:", reduced.Cursor().Index())
 
-	incoming := timeseries.New(0, timeseries.Period1m, -2)
-	incoming.Push(start+3*60, 103.25)
-	incoming.Push(start+5*60, 104.50)
+	incoming := timeseries.New(start, time.Minute, -2)
+	incoming.Push(start.Add(3*time.Minute), 103.25)
+	incoming.Push(start.Add(5*time.Minute), 104.50)
 	prices.Merge(incoming)
-	cursor.Seek(start + 3*60)
-	fmt.Println("Merged:", prices.Nums(), "sma:", cursor.Avg(3*timeseries.Period1m))
-
-	fraction := 0.1
-	fraction += 0.2
-	fmt.Println("Original precision:", timeseries.PrecisionExp(fraction))
-	computed := timeseries.New(0, timeseries.Period1s, -1)
-	computed.Push(start, fraction)
-	fmt.Println("Computed value:", computed.Nums())
-	rounded := timeseries.New(start, timeseries.Period1m, -3)
-	rounded.Append(1.005)
-	rounded.SetExp(-2)
-	fmt.Println("Rounded:", rounded.Nums())
+	cursor.Seek(start.Add(3 * time.Minute))
+	fmt.Println("Merged:", prices.Nums(), "sma:", cursor.Avg(3*time.Minute))
 
 	dir, err := os.MkdirTemp("", "timeseries-example-*")
 	if err != nil {

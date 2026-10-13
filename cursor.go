@@ -3,6 +3,7 @@ package timeseries
 import (
 	"iter"
 	"math"
+	"time"
 )
 
 // Cursor walks a TimeSeries without copying its data. Position, index bounds,
@@ -59,15 +60,15 @@ func (c *Cursor) EndIndex() int {
 // Index returns the current absolute sample index, initially StartIndex().
 func (c *Cursor) Index() int { return c.index }
 
-// Time returns the current Unix timestamp in seconds. If there is no sample
+// Time returns the current timestamp in UTC. If there is no sample
 // at the current position, it returns the cursor's starting boundary time.
-func (c *Cursor) Time() int64 {
+func (c *Cursor) Time() time.Time {
 	start, end := c.bounds()
 	index := c.index
 	if index < start || index >= end {
 		index = start
 	}
-	return c.series.Time0 + int64(index)*c.series.Step
+	return nanoTime(c.series.time0 + int64(index)*int64(c.series.step))
 }
 
 // Value returns the current value, or NaN if the position is outside the
@@ -80,21 +81,18 @@ func (c *Cursor) Value() float64 {
 	return c.series.value(c.index)
 }
 
-// Seek moves to the interval containing a literal nonnegative Unix timestamp
-// in seconds, clamped to this cursor's range. An empty cursor stays at its
-// starting boundary index.
-func (c *Cursor) Seek(timestamp int64) *Cursor {
+// Seek moves to the interval containing timestamp, clamped to this cursor's
+// range. An empty cursor stays at its starting boundary index.
+func (c *Cursor) Seek(at time.Time) *Cursor {
+	timestamp := unixNano(at)
 	ts := c.series
 	ts.validate()
-	if timestamp < 0 {
-		panic("timeseries: timestamp must be nonnegative")
-	}
 	start, end := c.bounds()
 	index := start
-	if timestamp >= ts.NextTime() {
+	if timestamp >= ts.nextTime() {
 		index = end - 1
-	} else if timestamp > ts.Time0 {
-		index = int((timestamp - ts.Time0) / ts.Step)
+	} else if timestamp > ts.time0 {
+		index = int((timestamp - ts.time0) / int64(ts.step))
 	}
 	c.index = max(start, min(index, end-1))
 	return c
@@ -105,13 +103,25 @@ func (c *Cursor) Seek(timestamp int64) *Cursor {
 // unchanged. Breaking the loop leaves the cursor on the last visited sample;
 // an empty range leaves its position unchanged. The loop body must not mutate
 // the series.
-func (c *Cursor) All() iter.Seq2[int64, float64] {
-	return func(yield func(int64, float64) bool) {
+func (c *Cursor) All() iter.Seq2[time.Time, float64] {
+	return func(yield func(time.Time, float64) bool) {
 		ts := c.series
 		ts.validate()
 		start, end := c.bounds()
-		scale, exp, step := ts.scale(), ts.Exp, ts.Step
-		for i, t := start, ts.Time0+int64(start)*step; i < end; i, t = i+1, t+step {
+		scale, exp, step := ts.scale(), ts.Exp, int64(ts.step)
+		t0 := ts.time0 + int64(start)*step
+		if step%int64(time.Second) == 0 {
+			step /= int64(time.Second)
+			nanos := t0 % int64(time.Second)
+			for i, seconds := start, t0/int64(time.Second); i < end; i, seconds = i+1, seconds+step {
+				c.index = i
+				if !yield(time.Unix(seconds, nanos).UTC(), decodeValue(ts.prices[i], exp, scale)) {
+					return
+				}
+			}
+			return
+		}
+		for i, t := start, nanoTime(t0); i < end; i, t = i+1, t.Add(time.Duration(step)) {
 			c.index = i
 			if !yield(t, decodeValue(ts.prices[i], exp, scale)) {
 				return
@@ -120,13 +130,43 @@ func (c *Cursor) All() iter.Seq2[int64, float64] {
 	}
 }
 
-// Avg returns the simple moving average ending at this cursor. period is in
-// seconds, rounded down to whole samples with a minimum of one. Negative
+// AllUnix iterates this cursor's range using Unix seconds, matching
+// time.Time.Unix. Subsecond timestamps are truncated and may repeat; use All
+// for full precision. Position and stopping behavior match All. The loop body
+// must not mutate the series.
+func (c *Cursor) AllUnix() iter.Seq2[int64, float64] {
+	return func(yield func(int64, float64) bool) {
+		ts := c.series
+		ts.validate()
+		start, end := c.bounds()
+		scale, exp, step := ts.scale(), ts.Exp, int64(ts.step)
+		t0 := ts.time0 + int64(start)*step
+		if step%int64(time.Second) == 0 {
+			step /= int64(time.Second)
+			for i, t := start, t0/int64(time.Second); i < end; i, t = i+1, t+step {
+				c.index = i
+				if !yield(t, decodeValue(ts.prices[i], exp, scale)) {
+					return
+				}
+			}
+			return
+		}
+		for i, t := start, t0; i < end; i, t = i+1, t+step {
+			c.index = i
+			if !yield(t/int64(time.Second), decodeValue(ts.prices[i], exp, scale)) {
+				return
+			}
+		}
+	}
+}
+
+// Avg returns the simple moving average ending at this cursor. The duration
+// is rounded down to whole samples with a minimum of one. Negative
 // periods panic. NaN is returned until a complete window is available.
 // Sequential calls reuse a running sum per window. Changes to existing values
 // or precision invalidate caches; appending values keeps them reusable.
 // Earlier samples outside a cursor's iteration range are included in the window.
-func (c *Cursor) Avg(period Period) float64 {
+func (c *Cursor) Avg(period time.Duration) float64 {
 	ts := c.series
 	ts.validate()
 	if period < 0 {
@@ -136,7 +176,11 @@ func (c *Cursor) Avg(period Period) float64 {
 		c.avg = nil
 		c.revision = ts.revision
 	}
-	n := max(1, int(int64(period)/ts.Step))
+	window := period / ts.step
+	if window > time.Duration(math.MaxInt) {
+		return math.NaN()
+	}
+	n := max(1, int(window))
 	start, end := c.bounds()
 	if c.index < start || c.index >= end || c.index < n-1 {
 		return math.NaN()

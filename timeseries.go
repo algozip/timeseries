@@ -5,35 +5,37 @@ import (
 	"iter"
 	"math"
 	"slices"
+	"time"
 )
 
 // TimeSeries stores one nonnegative value per interval using four bytes per
-// sample. A stored integer p represents p * 10^Exp. Set Time0, Step, and Exp
-// before adding data; use SetExp to change precision afterwards.
+// sample. Time metadata is held privately in nanoseconds. A stored integer p
+// represents p * 10^Exp. Use SetExp to change precision after adding data.
 // Iteration does not change the series. Use Cursor for position-based averages.
 type TimeSeries struct {
-	Time0 int64 // Unix timestamp of the first sample, in seconds.
-	Step  int64 // Positive sampling interval, in seconds.
-	Exp   int   // Decimal exponent: -2 stores values to two decimal places.
+	Exp int // Decimal exponent: -2 stores values to two decimal places.
 
+	time0    int64
+	step     time.Duration
 	prices   []uint32
 	revision uint64
 }
 
-// New creates an empty series with a positive period and an exponent between
-// -308 and 308. time0 must be nonnegative and is used by Append. The first Push
-// sets Time0 to its own timestamp instead. Invalid metadata panics.
-func New(time0 int64, period Period, exp int) *TimeSeries {
-	ts := &TimeSeries{Time0: time0, Step: int64(period), Exp: exp}
+// New creates an empty series with a positive step and an exponent between
+// -308 and 308. start is used by Append; the first Push sets its own start.
+// Times must be between the Unix epoch and the maximum int64 Unix nanosecond
+// timestamp. Subsecond steps and timestamps are supported. Invalid input panics.
+func New(start time.Time, step time.Duration, exp int) *TimeSeries {
+	ts := &TimeSeries{time0: unixNano(start), step: step, Exp: exp}
 	ts.validate()
 	return ts
 }
 
 func (ts *TimeSeries) validate() {
-	if ts.Time0 < 0 {
+	if ts.time0 < 0 {
 		panic("timeseries: timestamp must be nonnegative")
 	}
-	if ts.Step <= 0 {
+	if ts.step <= 0 {
 		panic("timeseries: step must be positive")
 	}
 	if ts.Exp < -308 || ts.Exp > 308 {
@@ -41,18 +43,22 @@ func (ts *TimeSeries) validate() {
 	}
 }
 
-// FullPeriod returns the duration covered by the series, in seconds.
-func (ts *TimeSeries) FullPeriod() int64 { return int64(ts.Size()) * ts.Step }
+// StartTime returns the series' start in UTC, including for an empty series.
+func (ts *TimeSeries) StartTime() time.Time { return nanoTime(ts.time0) }
+
+// Step returns the sampling interval.
+func (ts *TimeSeries) Step() time.Duration { return ts.step }
+
+// Duration returns the duration covered by all sample intervals, including
+// the final interval. An empty series has duration zero.
+func (ts *TimeSeries) Duration() time.Duration { return time.Duration(ts.Size()) * ts.step }
 
 func (ts *TimeSeries) String() string {
 	if ts.Size() == 0 {
 		return "<TS-empty>"
 	}
-	return fmt.Sprintf("<TS-%s [%d %g] [%d %g]>", ts.Period(), ts.Time0, ts.value(0), ts.LastTime(), ts.value(ts.Size()-1))
+	return fmt.Sprintf("<TS-%s [%s %g] [%s %g]>", ts.step, ts.StartTime().Format(time.RFC3339Nano), ts.value(0), ts.LastTime().Format(time.RFC3339Nano), ts.value(ts.Size()-1))
 }
-
-// Period returns the sampling interval.
-func (ts *TimeSeries) Period() Period { return Period(ts.Step) }
 
 // Size returns the number of samples. A nil series has size zero.
 func (ts *TimeSeries) Size() int {
@@ -65,15 +71,25 @@ func (ts *TimeSeries) Size() int {
 // Precision returns the smallest value increment represented by the series.
 func (ts *TimeSeries) Precision() float64 { return Pow10(ts.Exp) }
 
-// NextTime returns the exclusive end time, or Time0 for an empty series.
-func (ts *TimeSeries) NextTime() int64 { return ts.Time0 + ts.Step*int64(ts.Size()) }
+func (ts *TimeSeries) nextTime() int64 { return ts.time0 + int64(ts.Duration()) }
 
-// LastTime returns the last sample time, or Time0 for an empty series.
-func (ts *TimeSeries) LastTime() int64 {
+// NextTime returns the exclusive end in UTC, or StartTime for an empty series.
+func (ts *TimeSeries) NextTime() time.Time { return nanoTime(ts.nextTime()) }
+
+func (ts *TimeSeries) lastTime() int64 {
 	if ts.Size() == 0 {
-		return ts.Time0
+		return ts.time0
 	}
-	return ts.NextTime() - ts.Step
+	return ts.nextTime() - int64(ts.step)
+}
+
+// LastTime returns the last sample time in UTC, or StartTime if empty.
+func (ts *TimeSeries) LastTime() time.Time { return nanoTime(ts.lastTime()) }
+
+func (ts *TimeSeries) checkLength(start, count int64) {
+	if count < 0 || count > int64(math.MaxInt) || count > (math.MaxInt64-start)/int64(ts.step) {
+		panic("timeseries: sample count or timestamp range overflows")
+	}
 }
 
 func (ts *TimeSeries) scale() float64 { return Pow10(abs(ts.Exp)) }
@@ -93,16 +109,16 @@ func (ts *TimeSeries) index(t int64) int {
 	if t < 0 {
 		panic("timeseries: timestamp must be nonnegative")
 	}
-	if ts.Size() == 0 || t < ts.Time0 || t >= ts.NextTime() {
+	if ts.Size() == 0 || t < ts.time0 || t >= ts.nextTime() {
 		return -1
 	}
-	return int((t - ts.Time0) / ts.Step)
+	return int((t - ts.time0) / int64(ts.step))
 }
 
 // ValueOf returns the value whose interval contains t, or NaN outside the
-// series. t is a literal nonnegative Unix timestamp in seconds.
-func (ts *TimeSeries) ValueOf(t int64) float64 {
-	if i := ts.index(t); i >= 0 {
+// series. Subsecond timestamps select the interval containing t.
+func (ts *TimeSeries) ValueOf(t time.Time) float64 {
+	if i := ts.index(unixNano(t)); i >= 0 {
 		return ts.value(i)
 	}
 	return math.NaN()
@@ -110,28 +126,30 @@ func (ts *TimeSeries) ValueOf(t int64) float64 {
 
 // Clone creates an independent copy of the metadata and values.
 func (ts *TimeSeries) Clone() *TimeSeries {
-	return &TimeSeries{Time0: ts.Time0, Step: ts.Step, Exp: ts.Exp, prices: slices.Clone(ts.prices)}
+	return &TimeSeries{time0: ts.time0, step: ts.step, Exp: ts.Exp, prices: slices.Clone(ts.prices)}
 }
 
 // Reduce keeps the first sample of each larger interval, including a final
-// partial interval. period must be a positive multiple of Step; otherwise it
-// panics. A larger period creates independent storage and preserves Time0;
+// partial interval. period must be a positive multiple of Step(); otherwise it
+// panics. A larger period creates independent storage and preserves StartTime();
 // an unchanged period returns the receiver. New cursors start at the first sample.
-func (ts *TimeSeries) Reduce(period Period) *TimeSeries {
+func (ts *TimeSeries) Reduce(period time.Duration) *TimeSeries {
 	ts.validate()
-	step := int64(period)
-	if step < ts.Step || step%ts.Step != 0 {
+	step := period
+	if step < ts.step || step%ts.step != 0 {
 		panic("timeseries: reduced period must be a positive multiple of step")
 	}
-	if step == ts.Step {
+	if step == ts.step {
 		return ts
 	}
-	k := step / ts.Step
+	k := int64(step / ts.step)
 	n := ts.Size()
 	if n > 0 {
 		n = int((int64(n)-1)/k + 1)
 	}
-	result := &TimeSeries{Time0: ts.Time0, Step: step, Exp: ts.Exp, prices: make([]uint32, n)}
+	result := &TimeSeries{time0: ts.time0, step: step, Exp: ts.Exp}
+	result.checkLength(result.time0, int64(n))
+	result.prices = make([]uint32, n)
 	for i := range result.prices {
 		result.prices[i] = ts.prices[int64(i)*k]
 	}
@@ -139,13 +157,13 @@ func (ts *TimeSeries) Reduce(period Period) *TimeSeries {
 }
 
 // Slice copies samples with timestamps in [from, to) into independent storage.
-// Bounds are literal nonnegative Unix seconds, just like Range. Bounds outside
+// Bounds use the same time.Time semantics as Range. Bounds outside
 // the series are clamped; an empty or reversed range produces an empty series.
-func (ts *TimeSeries) Slice(from, to int64) *TimeSeries {
-	i, j := ts.rangeIndices(from, to)
+func (ts *TimeSeries) Slice(from, to time.Time) *TimeSeries {
+	i, j := ts.rangeIndices(unixNano(from), unixNano(to))
 	return &TimeSeries{
-		Time0:  ts.Time0 + int64(i)*ts.Step,
-		Step:   ts.Step,
+		time0:  ts.time0 + int64(i)*int64(ts.step),
+		step:   ts.step,
 		Exp:    ts.Exp,
 		prices: slices.Clone(ts.prices[i:j]),
 	}
@@ -153,15 +171,15 @@ func (ts *TimeSeries) Slice(from, to int64) *TimeSeries {
 
 // bound returns the first index whose timestamp is at least t.
 func (ts *TimeSeries) bound(t int64) int {
-	if t <= ts.Time0 {
+	if t <= ts.time0 {
 		return 0
 	}
-	if t >= ts.NextTime() {
+	if t >= ts.nextTime() {
 		return ts.Size()
 	}
-	d := t - ts.Time0
-	i := d / ts.Step
-	if d%ts.Step != 0 {
+	d := t - ts.time0
+	i := d / int64(ts.step)
+	if d%int64(ts.step) != 0 {
 		i++
 	}
 	return int(i)
@@ -176,12 +194,12 @@ func (ts *TimeSeries) rangeIndices(from, to int64) (int, int) {
 	return i, max(i, j)
 }
 
-func (ts *TimeSeries) tailStart(period Period) int64 {
+func (ts *TimeSeries) tailStart(period time.Duration) int64 {
 	ts.validate()
 	if period < 0 {
 		panic("timeseries: tail period must be nonnegative")
 	}
-	return max(ts.Time0, ts.NextTime()-int64(period))
+	return max(ts.time0, ts.nextTime()-int64(period))
 }
 
 func normValue(p float64, exp int) uint32 {
@@ -199,28 +217,30 @@ func normValue(p float64, exp int) uint32 {
 }
 
 // Push stores value in the interval containing timestamp. The first Push on
-// an empty series sets Time0 to timestamp without creating leading zero values.
-// Subsequent intervals are relative to Time0. Missing intervals repeat the
-// previous value; existing intervals are overwritten. Precision increases
-// automatically using PrecisionExp. Invalid values, overflow, negative times,
-// and timestamps before a nonempty series' start panic.
-func (ts *TimeSeries) Push(timestamp int64, value float64) {
+// an empty series sets its exact start without creating leading zero values.
+// Missing intervals repeat the previous value; existing intervals are
+// overwritten. Precision increases automatically using PrecisionExp. Invalid
+// values, overflow, and timestamps before a nonempty series' start panic.
+func (ts *TimeSeries) Push(timestamp time.Time, value float64) {
 	ts.validate()
-	if timestamp < 0 {
-		panic("timeseries: timestamp must be nonnegative")
-	}
-	if ts.Size() > 0 && timestamp < ts.Time0 {
+	t := unixNano(timestamp)
+	start := ts.time0
+	if ts.Size() == 0 {
+		start = t
+	} else if t < start {
 		panic("timeseries: timestamp precedes the series start")
 	}
+	index := (t - start) / int64(ts.step)
+	ts.checkLength(start, index+1)
 	exp := min(ts.Exp, PrecisionExp(value))
 	p := normValue(value, exp)
 	if exp != ts.Exp {
 		ts.SetExp(exp)
 	}
 	if ts.Size() == 0 {
-		ts.Time0 = timestamp
+		ts.time0 = start
 	}
-	i := int((timestamp - ts.Time0) / ts.Step)
+	i := int(index)
 	if i < ts.Size() {
 		ts.revision++
 	}
@@ -238,6 +258,7 @@ func (ts *TimeSeries) Push(timestamp int64, value float64) {
 // Invalid values or uint32 overflow panic.
 func (ts *TimeSeries) Append(value float64) {
 	ts.validate()
+	ts.checkLength(ts.time0, int64(ts.Size())+1)
 	ts.prices = append(ts.prices, normValue(value, ts.Exp))
 }
 
@@ -282,12 +303,12 @@ func (ts *TimeSeries) SetExp(exp int) *TimeSeries {
 // Apply replaces each value with fn(timestamp, value), rounded to the existing
 // precision. Invalid results panic without changing the series. fn must not
 // mutate the receiver. Cursor average caches are invalidated automatically.
-func (ts *TimeSeries) Apply(fn func(int64, float64) float64) *TimeSeries {
+func (ts *TimeSeries) Apply(fn func(time.Time, float64) float64) *TimeSeries {
 	ts.validate()
 	prices := make([]uint32, ts.Size())
 	scale := ts.scale()
 	for i, p := range ts.prices {
-		prices[i] = normValue(fn(ts.Time0+int64(i)*ts.Step, decodeValue(p, ts.Exp, scale)), ts.Exp)
+		prices[i] = normValue(fn(nanoTime(ts.time0+int64(i)*int64(ts.step)), decodeValue(p, ts.Exp, scale)), ts.Exp)
 	}
 	ts.prices = prices
 	ts.revision++
@@ -316,14 +337,14 @@ func (ts *TimeSeries) merge(other *TimeSeries) (err error) {
 		return nil
 	}
 	other.validate()
-	if ts.Size() == 0 && ts.Step == 0 {
-		ts.Step, ts.Exp = other.Step, other.Exp
+	if ts.Size() == 0 && ts.step == 0 {
+		ts.step, ts.Exp = other.step, other.Exp
 	}
 	ts.validate()
-	if ts.Step != other.Step {
+	if ts.step != other.step {
 		panic("timeseries: merged series must have matching steps")
 	}
-	if ts.Size() > 0 && (other.Time0-ts.Time0)%ts.Step != 0 {
+	if ts.Size() > 0 && (other.time0-ts.time0)%int64(ts.step) != 0 {
 		panic("timeseries: merged series must have matching interval alignment")
 	}
 	for timestamp, value := range other.All() {
@@ -342,15 +363,26 @@ func (ts *TimeSeries) Nums() []float64 {
 	return values
 }
 
-// All returns an iterator over all timestamp-value pairs. Each traversal starts
-// at the first sample and leaves all cursors unchanged. The loop body must not
-// mutate the series. Breaking the loop stops iteration.
-func (ts *TimeSeries) All() iter.Seq2[int64, float64] {
-	return func(yield func(int64, float64) bool) {
+// All iterates timestamp-value pairs with exact UTC timestamps. Each
+// traversal starts at the first sample and leaves all cursors unchanged.
+// The loop body must not mutate the series. Breaking stops iteration.
+func (ts *TimeSeries) All() iter.Seq2[time.Time, float64] {
+	return func(yield func(time.Time, float64) bool) {
 		ts.validate()
-		scale, exp, step := ts.scale(), ts.Exp, ts.Step
-		end := ts.Size()
-		for i, t := 0, ts.Time0; i < end; i, t = i+1, t+step {
+		start, end := 0, ts.Size()
+		scale, exp, step := ts.scale(), ts.Exp, int64(ts.step)
+		t0 := ts.time0 + int64(start)*step
+		if step%int64(time.Second) == 0 {
+			step /= int64(time.Second)
+			nanos := t0 % int64(time.Second)
+			for i, seconds := start, t0/int64(time.Second); i < end; i, seconds = i+1, seconds+step {
+				if !yield(time.Unix(seconds, nanos).UTC(), decodeValue(ts.prices[i], exp, scale)) {
+					return
+				}
+			}
+			return
+		}
+		for i, t := start, nanoTime(t0); i < end; i, t = i+1, t.Add(time.Duration(step)) {
 			if !yield(t, decodeValue(ts.prices[i], exp, scale)) {
 				return
 			}
@@ -358,86 +390,109 @@ func (ts *TimeSeries) All() iter.Seq2[int64, float64] {
 	}
 }
 
+// AllUnix iterates timestamp-value pairs using Unix seconds, matching
+// time.Time.Unix. Subsecond timestamps are truncated and may repeat; use All
+// to preserve full timestamp precision. Whole-second steps use integer
+// increments with conversion outside the loop. Cursors are unchanged.
+// The loop body must not mutate the series. Breaking stops iteration.
+func (ts *TimeSeries) AllUnix() iter.Seq2[int64, float64] {
+	return func(yield func(int64, float64) bool) {
+		ts.validate()
+		scale, exp, step := ts.scale(), ts.Exp, int64(ts.step)
+		end := ts.Size()
+		if step%int64(time.Second) == 0 {
+			step /= int64(time.Second)
+			for i, t := 0, ts.time0/int64(time.Second); i < end; i, t = i+1, t+step {
+				if !yield(t, decodeValue(ts.prices[i], exp, scale)) {
+					return
+				}
+			}
+			return
+		}
+		for i, t := 0, ts.time0; i < end; i, t = i+1, t+step {
+			if !yield(t/int64(time.Second), decodeValue(ts.prices[i], exp, scale)) {
+				return
+			}
+		}
+	}
+}
+
 // Range creates an independent cursor for sample timestamps in [from, to).
-// Bounds are literal nonnegative Unix seconds: zero is the Unix epoch, not
-// an open bound. Bounds outside the series are clamped; empty or reversed
-// ranges create empty cursors. Index bounds are fixed at creation and do not
-// grow when samples are appended. Iterate with cursor.All(). No values are
-// copied, and existing cursors are unchanged.
-func (ts *TimeSeries) Range(from, to int64) *Cursor {
-	start, end := ts.rangeIndices(from, to)
+// Bounds preserve nanosecond precision and are clamped to the series. Empty
+// or reversed ranges create empty cursors. Index bounds are fixed at creation
+// and do not grow when samples are appended. No values are copied.
+func (ts *TimeSeries) Range(from, to time.Time) *Cursor {
+	start, end := ts.rangeIndices(unixNano(from), unixNano(to))
 	return ts.newCursor(start, end)
 }
 
-// Tail creates an independent cursor for the last period seconds, using the
-// same [from, to) semantics as Range. Its bounds are fixed at creation. A zero
-// period creates an empty cursor; a negative period panics. Iterate with
-// cursor.All(). No values are copied, and existing cursors are unchanged.
-func (ts *TimeSeries) Tail(period Period) *Cursor {
-	return ts.Range(ts.tailStart(period), ts.NextTime())
+// Tail creates an independent cursor for the final duration of the series.
+// Its bounds are fixed at creation. A zero duration creates an empty cursor;
+// a negative duration panics. No values are copied.
+func (ts *TimeSeries) Tail(period time.Duration) *Cursor {
+	start, end := ts.rangeIndices(ts.tailStart(period), ts.nextTime())
+	return ts.newCursor(start, end)
 }
 
 // Iterator visits all samples until fn returns false. It leaves all cursors
 // unchanged. The callback must not mutate the series.
-func (ts *TimeSeries) Iterator(fn func(int64, float64) bool) { ts.All()(fn) }
+func (ts *TimeSeries) Iterator(fn func(time.Time, float64) bool) { ts.All()(fn) }
 
 // Fetch visits every sample without changing any cursor. The callback must
 // not mutate the series.
-func (ts *TimeSeries) Fetch(fn func(int64, float64)) {
+func (ts *TimeSeries) Fetch(fn func(time.Time, float64)) {
 	for timestamp, value := range ts.All() {
 		fn(timestamp, value)
 	}
 }
 
-// FetchFromTo visits sample timestamps in [from, to), using the same literal
-// nonnegative Unix seconds as Range. It leaves all cursors unchanged.
+// FetchFromTo visits sample timestamps in [from, to), using the same time.Time
+// bounds as Range. It leaves all cursors unchanged.
 // The callback must not mutate the series.
-func (ts *TimeSeries) FetchFromTo(from, to int64, fn func(int64, float64)) {
+func (ts *TimeSeries) FetchFromTo(from, to time.Time, fn func(time.Time, float64)) {
 	for timestamp, value := range ts.Range(from, to).All() {
 		fn(timestamp, value)
 	}
 }
 
 // FetchMergedTimeSeries visits the common time range of all series, starting
-// at or after t0, a nonnegative Unix timestamp in seconds. Steps and alignment
-// must match; otherwise it panics. It leaves all cursors unchanged. The values
+// at or after from. Steps and alignment must match; otherwise it panics.
+// It leaves all cursors unchanged. The values
 // slice is reused between calls; copy it to retain values. The callback must
 // not mutate the series or the input slice.
-func FetchMergedTimeSeries(series []*TimeSeries, t0 int64, fn func(int64, []float64)) {
-	if t0 < 0 {
-		panic("timeseries: timestamp must be nonnegative")
-	}
+func FetchMergedTimeSeries(series []*TimeSeries, from time.Time, fn func(time.Time, []float64)) {
+	t0 := unixNano(from)
 	if len(series) == 0 || series[0].Size() == 0 {
 		return
 	}
 	first := series[0]
 	first.validate()
-	start, end := max(t0, first.Time0), first.NextTime()
+	start, end := max(t0, first.time0), first.nextTime()
 	for _, ts := range series {
 		if ts.Size() == 0 {
 			return
 		}
 		ts.validate()
-		if ts.Step != first.Step || (ts.Time0-first.Time0)%first.Step != 0 {
+		if ts.step != first.step || (ts.time0-first.time0)%int64(first.step) != 0 {
 			panic("timeseries: merged iteration requires matching steps and alignment")
 		}
-		start, end = max(start, ts.Time0), min(end, ts.NextTime())
+		start, end = max(start, ts.time0), min(end, ts.nextTime())
 	}
 	if start >= end {
 		return
 	}
-	start = first.Time0 + int64(first.bound(start))*first.Step
+	start = first.time0 + int64(first.bound(start))*int64(first.step)
 	indices := make([]int, len(series))
 	scales := make([]float64, len(series))
 	values := make([]float64, len(series))
 	for i, ts := range series {
-		indices[i], scales[i] = int((start-ts.Time0)/ts.Step), ts.scale()
+		indices[i], scales[i] = int((start-ts.time0)/int64(ts.step)), ts.scale()
 	}
-	for t := start; t < end; t += first.Step {
+	for t, timestamp := start, nanoTime(start); t < end; t, timestamp = t+int64(first.step), timestamp.Add(first.step) {
 		for i, ts := range series {
 			values[i] = decodeValue(ts.prices[indices[i]], ts.Exp, scales[i])
 			indices[i]++
 		}
-		fn(t, values)
+		fn(timestamp, values)
 	}
 }

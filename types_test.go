@@ -22,10 +22,10 @@ func Test_PrecisionExp(t *testing.T) {
 	} {
 		assertEqual(t, PrecisionExp(tc.value), tc.exp)
 	}
-	ts := New(t0, Period1s, -1)
-	ts.Push(t0, computed)
+	ts := New(at(t0), seconds(1), -1)
+	ts.Push(at(t0), computed)
 	assertEqual(t, ts.Exp, -1)
-	assertEqual(t, ts.ValueOf(t0), 0.3)
+	assertEqual(t, ts.ValueOf(at(t0)), 0.3)
 }
 
 func TestPow10(t *testing.T) {
@@ -34,21 +34,5 @@ func TestPow10(t *testing.T) {
 		if math.Abs(got/want-1) > 1e-15 {
 			t.Fatalf("Pow10(%d): got %.17g; want %.17g", exp, got, want)
 		}
-	}
-}
-
-func TestPeriod(t *testing.T) {
-	for _, tc := range []struct {
-		text   string
-		period Period
-	}{
-		{"1s", Period1s}, {"15s", 15}, {"1m", Period1m}, {"15m", 15 * Period1m},
-		{"1h", Period1h}, {"4h", Period4h}, {"1d", Period1D}, {"2d", 2 * Period1D},
-	} {
-		assertEqual(t, PeriodByString(tc.text), tc.period)
-		assertEqual(t, tc.period.String(), tc.text)
-	}
-	for _, text := range []string{"", "s", "0s", "-1m", "1x", "1.5h", "9223372036854775807d"} {
-		assertEqual(t, PeriodByString(text), Period(0))
 	}
 }

@@ -8,13 +8,12 @@ go get github.com/denisskin/timeseries
 
 Requires Go 1.23 or later. No external dependencies.
 
-Values use `uint32` storage with a shared decimal exponent, taking **4 bytes per
-sample** for the value array. Timestamps are computed from a start time and an
-interval in seconds. The package includes gap filling, range iteration, copying,
-downsampling, merging, independent cursors with moving averages, and
-gzip-compressed delta-varint storage.
+Values use `uint32` storage with a shared decimal exponent: **4 bytes per sample**
+for the value array. Timestamps are implicit. The API uses `time.Time` and
+`time.Duration`, while the start and interval are held privately as integer
+nanoseconds. Subsecond timestamps and intervals are preserved exactly.
 
-Run the included example with `go run ./examples/basic` from a checkout.
+Run the included example with `go run ./examples/basic`.
 
 ## Quick start
 
@@ -23,240 +22,199 @@ package main
 
 import (
     "fmt"
-    "log"
+    "time"
 
     "github.com/denisskin/timeseries"
 )
 
 func main() {
-    const start int64 = 1700000100
-    prices := timeseries.New(0, timeseries.Period1m, -2)
+    start := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+    prices := timeseries.New(start, time.Minute, -2)
     prices.Push(start, 100.25)
     prices.Append(101.50)
-    prices.Push(start + 3*60, 102.75)
+    prices.Push(start.Add(3*time.Minute), 102.75)
     // The missing third minute repeats 101.50.
 
-    cursor := prices.Cursor()
+    cursor := prices.Range(start, start.Add(4*time.Minute))
     for timestamp, price := range cursor.All() {
-        fmt.Printf("%d price=%.2f sma=%.4f\n",
-            timestamp, price, cursor.Avg(3*timeseries.Period1m))
+        fmt.Println(timestamp, price, cursor.Avg(3*time.Minute))
     }
     // The average is NaN until three samples are available.
-
-    if err := prices.WriteToFile("prices.zts"); err != nil {
-        log.Fatal(err)
-    }
-    restored, err := timeseries.TimeSeriesRead("prices.zts")
-    if err != nil {
-        log.Fatal(err)
-    }
-    fmt.Println(restored.Nums()) // [100.25 101.5 101.5 102.75]
 }
 ```
+
+## Time and duration
+
+| Operation | Time API |
+| --- | --- |
+| `New(start, step, exp)` | `start time.Time`, `step time.Duration` |
+| `StartTime()`, `LastTime()`, `NextTime()` | Return `time.Time` in UTC |
+| `Step()`, `Duration()` | Return `time.Duration` |
+| `Push(timestamp, value)`, `ValueOf(timestamp)` | Accept `time.Time` |
+| `Range(from, to)`, `Slice(from, to)` | Accept two `time.Time` bounds |
+| `Tail(duration)`, `Reduce(step)`, `cursor.Avg(duration)` | Accept `time.Duration` |
+| `cursor.Seek(timestamp)`, `cursor.Time()` | Accept or return `time.Time` |
+| `All()` | Return `iter.Seq2[time.Time, float64]` |
+| `AllUnix()` | Return `iter.Seq2[int64, float64]` with Unix **seconds** |
+
+`Duration()` covers all sample intervals, including the final interval.
+`NextTime()` is the exclusive end. On an empty series, `LastTime()` and
+`NextTime()` return `StartTime()`. `Step()` must be positive; nanosecond steps
+are supported. Use standard durations such as `time.Minute`, `4*time.Hour`, or
+`250*time.Microsecond`.
+
+Input locations are accepted, and returned timestamps are normalized to UTC.
+Monotonic clock readings and the input location are not stored. Supported times
+range from the Unix epoch through `2262-04-11T23:47:16.854775807Z`, the largest
+nonnegative int64 Unix nanosecond timestamp. Invalid dates or a series whose
+exclusive end would overflow this range are rejected. `time.Time{}` is outside
+this range and is not a special marker.
+
+## Iteration and speed
+
+`All()` preserves full timestamp precision. `AllUnix()` returns seconds exactly
+like `time.Time.Unix()` and avoids constructing a `time.Time` per sample. When
+the step is a whole number of seconds, time conversion occurs once before the
+loop and the loop increments an integer timestamp. For subsecond steps,
+`AllUnix()` truncates timestamps to seconds, so multiple samples may have the
+same timestamp; use `All()` when full precision is needed.
+
+```go
+for timestamp, price := range prices.AllUnix() {
+    fmt.Println(timestamp, price)
+}
+```
+
+Both iterators support `break` and repeat traversal from the beginning. Series
+iteration leaves existing cursors unchanged. Loop bodies must not mutate the
+series.
+
+`Iterator`, `Fetch`, `FetchFromTo`, and `Apply` callbacks receive `time.Time`.
+`FetchMergedTimeSeries` also uses `time.Time` for its starting bound and callback.
 
 ## Series and cursors
 
-`TimeSeries` owns the data. Its `All`, `Iterator`, and `Fetch` methods leave
-all cursors unchanged. Use these for stateless or nested traversal:
+`TimeSeries` owns the data. A `Cursor` references it without copying values and
+keeps independent position, index bounds, and moving-average caches.
+
+`series.Cursor()` creates a full-series cursor that sees appended samples.
+`series.Range(from, to)` and `series.Tail(duration)` create bounded cursors with
+fixed indices; their ends do not grow after insertion. `StartIndex()` is
+inclusive, `EndIndex()` is exclusive, and `Index()` is absolute in the source
+series. `Seek` stays within the cursor's bounds.
 
 ```go
-for timestamp, price := range prices.All() {
-    fmt.Println(timestamp, price)
+cursor := prices.Range(from, to)
+for timestamp, price := range cursor.AllUnix() {
+    fmt.Println(timestamp, price, cursor.Avg(time.Hour))
 }
 ```
 
-A `Cursor` references a series without copying values and keeps its own position,
-index bounds, and moving-average caches. `prices.Cursor()` creates a full-series
-cursor at sample zero; its end follows the current series length, including
-appended samples.
+`cursor.All()` and `cursor.AllUnix()` update only that cursor before yielding.
+`break` leaves its position on the last visited sample. Empty traversal leaves
+the position unchanged. Each traversal begins at `StartIndex()`. If the series
+becomes shorter, available bounds are clamped to its new length. Empty cursors
+return `NaN` from `Value()` and `Avg()`.
 
-Select a bounded cursor directly from the series with `Range(from, to)` or
-`Tail(period)`. Time boundaries are converted to absolute sample indices once,
-when the cursor is created. `StartIndex()` is inclusive and `EndIndex()` is
-exclusive. Fixed bounds do not grow when values are appended:
+`Avg(duration)` uses `max(1, duration / step)` samples and returns `NaN` until a
+complete window is available. Its window includes earlier history outside the
+selected range. Sequential calls reuse cached running sums. Overwriting values,
+changing precision, or decoding replacement data invalidates caches; appending
+values preserves them and does not move existing cursors.
 
-```go
-cursor := prices.Range(from.Unix(), to.Unix())
-other := prices.Cursor()
+Separate cursors can read an immutable series concurrently. Use separate cursors
+for nested traversal. A shared cursor or series mutation needs external
+synchronization. `Exp` must only be assigned before adding data; use `SetExp`
+afterwards. Start and step are private and exposed through read-only getters.
 
-fmt.Println(cursor.StartIndex(), cursor.EndIndex())
-for timestamp, price := range cursor.All() {
-    fmt.Println(timestamp, price, cursor.Avg(timeseries.Period1h))
-    // Reading through other or prices.All() does not move cursor.
-}
+## Ranges and copies
 
-other.Seek(prices.LastTime())
-fmt.Println(other.Index(), other.Time(), other.Value())
-```
+All ranges use `[from, to)`: start inclusive, end exclusive. Bounds preserve
+nanosecond precision, and only sample timestamps inside the range are selected.
+Bounds outside the series are clamped. Empty or reversed ranges are empty.
+There are no special date sentinels.
 
-`Cursor.All()` visits only that cursor's range, updating its position before each
-yield. `Index()` is an absolute index into the original series. `Seek` clamps
-to the cursor's range. An empty cursor has no current value, so `Value` and `Avg`
-return `NaN`. If the series becomes shorter, the available bounds are clamped
-to its new length.
+`Slice(from, to)` copies the selected values into independent storage. `Clone()`
+copies the complete series. `Tail(duration)` selects recent data without copying;
+`Tail(0)` is empty, and negative durations panic.
 
-`break` leaves the cursor on the last visited sample; an empty traversal leaves
-its position unchanged. Each traversal starts at `StartIndex()`. Create a
-separate cursor for each backtest, concurrent reader, or nested traversal that
-needs its own position. A single cursor must not be used for simultaneous or
-nested traversal.
+`Reduce(step)` keeps the first sample of each larger interval, including a final
+partial interval. The new step must be a positive multiple of the original.
+A larger step creates independent data and preserves the start; an unchanged
+step returns the receiver. New cursors begin at the first sample.
 
-`cursor.Avg(period)` uses `max(1, period / Step)` samples, returns `NaN` before a
-complete window is available, and includes earlier history outside a selected
-range. Sequential calls reuse cached running sums. Changes to existing values,
-precision, or decoded data invalidate cursor caches automatically. Appending
-values preserves reusable caches and does not move existing cursors.
+## Insertion and merging
 
-Multiple cursors can read an immutable series concurrently. Mutating a series
-while iterating it, or sharing one cursor between goroutines, requires external
-synchronization. Set the exported metadata fields only before adding data.
+`Append(value)` adds at `NextTime()`, rounding to the current precision.
+`Push(timestamp, value)` increases precision when necessary and stores the value
+in its interval. The first `Push` on an empty series sets its exact start to the
+incoming timestamp, overriding the constructor's start without leading zeros.
+Intervals are relative to that start. Gaps repeat the preceding value, and
+existing intervals are overwritten.
 
-## Time boundaries
+`Merge(other)` feeds all incoming values through `Push`. Steps and time-grid
+alignment must match. Incoming values replace overlaps, gaps are filled, and
+samples before a nonempty receiver's start are rejected. An empty zero-value
+receiver adopts the source step and exponent. The source is unchanged. If a
+later push fails, earlier pushes remain applied.
 
-All timestamps and range bounds are **literal nonnegative Unix seconds**.
-Convert `time.Time` values with `.Unix()`. Every range uses `[from, to)`: start
-inclusive, end exclusive. Bounds outside the series are clamped. Unaligned
-bounds select only sample timestamps inside the requested range. Empty or
-reversed ranges produce no samples. Negative timestamps panic.
+`FetchMergedTimeSeries` visits the common time range of all input series, using
+matching steps and alignment. It leaves the input slice and existing cursors
+unchanged. Its callback value slice is reused; copy it to retain values.
 
-There are no special timestamp sentinels: `0` means the Unix epoch, so
-`Range(0, 0)` and `Slice(0, 0)` are empty. Use `All()` for the complete series,
-`Clone()` for a full independent copy, and `Tail(period)` for recent data:
+## Precision
 
-```go
-for timestamp, price := range prices.Range(from.Unix(), to.Unix()).All() {
-    fmt.Println(timestamp, price)
-}
-for timestamp, price := range prices.Tail(timeseries.Period1h).All() {
-    fmt.Println(timestamp, price)
-}
-copy := prices.Slice(from.Unix(), to.Unix())
-```
+A stored integer `p` represents `p * 10^Exp`. For example, `Exp=-2` stores cents
+and represents values from `0` through `42,949,672.95`. The original numeric
+`PrecisionExp` ignores absolute floating-point differences up to `1e-15`.
+`SetExp` increases precision using the existing float conversion; decreasing
+precision uses integer arithmetic with halfway values rounded up. A value of
+`1.005` at exponent `-3` becomes `1.01` at exponent `-2`.
 
-Periods are durations in seconds. `Tail(0)` is empty; negative periods panic.
-`Seek` clamps to the cursor's available samples, including
-when seeking beyond its last sample. Use
-`prices.Cursor().Seek(prices.LastTime())` to select the series' last sample,
-without negative sentinels.
-
-## Working with data
-
-| Operation | Behavior |
-| --- | --- |
-| `New(time0, period, exp)` | Create an empty series. `Append` uses the supplied start; the first `Push` sets its own start. |
-| `Push(timestamp, value)` | Store a value in its interval, automatically increasing precision and filling gaps with the previous value. |
-| `Append(value)` | Add at `NextTime()`, rounding to the current precision. |
-| `ValueOf(timestamp)` | Return the interval's value, or `math.NaN()` outside the series. |
-| `Cursor()` | Create a full-series cursor with an independent position and average caches; appended samples are visible. |
-| `All()` | Return a stateless `iter.Seq2[int64, float64]` over the complete series. |
-| `Range(from, to)`, `Tail(period)` | Create independent cursors with fixed start and end indices, without copying values. |
-| `Slice(from, to)` | Copy sample timestamps in `[from, to)` into independent storage. |
-| `Clone()` | Copy all metadata and values into independent storage. |
-| `Reduce(period)` | Copy the first sample of each larger interval, including a final partial interval. |
-| `Apply(fn)` | Replace values with transformed values at the current precision. |
-| `Merge(other)` | Feed all incoming values through `Push`; incoming values replace overlaps and gaps are filled. |
-| `FetchMergedTimeSeries(series, start, fn)` | Visit matching timestamps in the common range without changing cursors. |
-
-The first `Push` always sets `Time0` to its exact timestamp. It does not create
-leading zeros, even if a different start was supplied to `New`. All subsequent
-intervals are relative to `Time0`, rather than aligned to the Unix epoch. This
-also allows appending to a reduced series without shifting its time grid.
-
-`Reduce` preserves `Time0` and requires a positive multiple of the original step.
-A larger period creates independent data; an unchanged period returns the
-receiver. New cursors on a reduced or copied series start at the first sample;
-existing cursors remain attached to the original.
-
-`Merge` requires matching steps and, for nonempty receivers, matching time-grid
-alignment. It accepts gaps, overwrites overlapping intervals with incoming
-values, and rejects incoming samples before the receiver's start. Empty
-zero-value receivers adopt the incoming step and exponent. The source remains
-unchanged. If a later push fails, earlier pushes remain applied.
-
-`FetchMergedTimeSeries` requires matching steps and alignment. It leaves the
-input slice and all cursors unchanged, and reuses its callback's value slice;
-copy that slice if you need to retain it. Callbacks must not mutate series data.
-
-## Precision and limits
-
-A stored integer `p` represents `p * 10^Exp`. For example, `Exp = -2` stores
-cents and represents values from `0` through `42,949,672.95`. `Append` rounds to
-the selected increment; `Push` increases precision using the original finance
-`PrecisionExp`, which ignores absolute floating-point differences up to `1e-15`.
-It uses numeric operations and the original `Pow10` table, without formatting
-values as strings.
-
-`SetExp` increases precision using the existing float conversion. Decreasing
-precision uses integer division with halfway values rounded up: `1.005` stored
-at `Exp=-3` becomes `1.01` at `Exp=-2`. It allocates new storage and leaves the
-series unchanged if conversion fails.
-
-Increasing precision can exceed the `uint32` storage limit. Invalid values,
-non-finite values, and overflow panic instead of wrapping. Exponents range from
-`-308` through `308`; the usable value range also depends on `float64` limits.
+Invalid or non-finite values and overflow panic rather than wrap. Exponents
+range from `-308` through `308`, subject to `uint32` and `float64` capacity.
 The package stores one nonnegative value per interval, without bid/ask or volume.
 
 ## Storage
 
-`WriteToFile` creates parent directories and writes a temporary file before
-replacing the destination. `TimeSeriesRead` validates the format and gzip
-checksum. `BinaryEncode` and `BinaryDecode` expose the uncompressed format through
-buffered readers and writers; callers must flush the writer.
+`WriteToFile` writes a gzip-compressed `.zts` file through a completed temporary
+file before replacing the destination. `TimeSeriesRead` verifies metadata and
+the gzip checksum. `BinaryEncode` and `BinaryDecode` expose the uncompressed
+format; callers must flush the buffered writer.
 
-The `.zts` format remains compatible with nonnegative-timestamp files from the
-original `finance.TimeSeries`: six signed varints (version `0`, reserved `0`,
-sample count, decimal exponent, start timestamp, and step), followed by signed
-varint deltas of the `uint32` values, wrapped in gzip for file storage.
+The header consists of six signed varints: version, reserved zero, sample count,
+decimal exponent, start timestamp, and step. Signed varint deltas of the `uint32`
+values follow the header.
 
-File extensions are not enforced by the reader or writer. Cursor state is never
-serialized.
+- Version `0` stores start and step in seconds. Whole-second series continue to
+  use this format and remain byte-compatible with previous releases.
+- Version `1` stores start and step in nanoseconds, preserving subsecond data.
+- The reader supports both versions and validates conversion and timestamp
+  overflow. Older readers cannot read version `1` files.
 
-## Validation
+File extensions are not enforced. Cursor state is never serialized.
+
+## Validation and benchmarks
 
 ```sh
 go test -race ./...
-go vet -stdmethods=false ./...
+go vet ./...
+go test -run '^$' -bench . -benchmem .
 ```
 
-`Cursor.Seek(timestamp)` uses Unix seconds. The `stdmethods` vet analyzer expects
-the `io.Seeker` signature for methods named `Seek`, so it is disabled for this
-API. All other vet analyzers remain enabled.
+## Migration from v0.6
 
-## Migration from v0.5
+- Pass `time.Time` directly to constructors, insertion, queries, and seeking.
+- Use `time.Duration` for sampling steps, reductions, tails, and average windows.
+- Replace time metadata fields with `StartTime()` and `Step()`.
+- Use `Duration()` for the total covered duration.
+- `All()` now yields `time.Time`; use `AllUnix()` for Unix seconds.
+- Callback-based traversal and transformations now receive `time.Time`.
+- Sampling interval types, constants, and parsing helpers have been removed;
+  use the standard `time` package.
 
-Cursor seeking now uses a single timestamp-based method: `cursor.Seek(timestamp)`.
-It stays within the cursor's index bounds and returns the cursor for chaining.
-There is no public method for seeking by sample index.
-
-## Migration from v0.4
-
-`Range` and `Tail` now belong only to `TimeSeries` and return a bounded `*Cursor`.
-Replace `cursor.Range(from, to)` with `cursor := series.Range(from, to)` followed
-by a loop over `cursor.All()`. For a one-off loop, use
-`for timestamp, price := range series.Range(from, to).All()`.
-Likewise, use `series.Tail(period).All()` instead of ranging over `Tail` directly.
-`Seek` stays inside a bounded cursor's range; `Avg` still
-includes earlier series history. `series.Cursor()` retains full-series behavior
-and sees newly appended samples.
-
-## Migration from v0.3
-
-- Replace `Push(Tick{Time: t, Ask: p})` with `Push(t, p)`.
-- Create `cursor := series.Cursor()` and move `Avg` and `Seek` calls to it.
-- Iterate `cursor.All()`; select bounded cursors with `series.Range(...)`.
-- Replace negative timestamps with explicit bounds or `Tail(period)`.
-- Replace zero end-bound sentinels with `NextTime()`, or use `All()`.
-- `Slice` now copies values; `CleanCopy` has been removed in favor of cursors.
-- `Tick`, `Ticks`, tick-based methods, `Diff`, and `MovingAverage` are removed.
-- `New` preserves its exact start, and the first `Push` overrides it.
-- `Merge` now overwrites overlaps and fills gaps through `Push`.
-
-## Origin
+## Origin and license
 
 Extracted from `finance/finance/timeseries.go` into a standalone Go module.
-Exchange integration, symbol lookup, download logic, and application-specific
-database paths stay outside this package.
-
-## License
-
-MIT
+Exchange integration and application-specific database paths stay outside the
+package. MIT license.

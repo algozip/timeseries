@@ -10,13 +10,15 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"time"
 )
 
-// BinaryEncode writes the original version-zero delta-varint format without
-// compression. The caller must flush w. The format contains version, reserved,
-// length, exponent, start timestamp, step, and signed deltas of uint32 prices.
+// BinaryEncode writes the delta-varint format without compression. Version
+// zero uses seconds for whole-second metadata; version one uses nanoseconds.
+// The caller must flush w. The format contains version, reserved, length,
+// exponent, start timestamp, step, and signed deltas of uint32 values.
 func (ts *TimeSeries) BinaryEncode(w *bufio.Writer) error {
-	if ts == nil || ts.Time0 < 0 || ts.Step <= 0 || ts.Exp < -308 || ts.Exp > 308 {
+	if ts == nil || ts.time0 < 0 || ts.step <= 0 || ts.Exp < -308 || ts.Exp > 308 {
 		return errors.New("timeseries: invalid series metadata")
 	}
 	var buf [binary.MaxVarintLen64]byte
@@ -25,7 +27,14 @@ func (ts *TimeSeries) BinaryEncode(w *bufio.Writer) error {
 		_, err := w.Write(buf[:n])
 		return err
 	}
-	for _, v := range []int64{0, 0, int64(ts.Size()), int64(ts.Exp), ts.Time0, ts.Step} {
+	start, step, version := ts.time0, int64(ts.step), int64(1)
+	if start%int64(time.Second) == 0 && step%int64(time.Second) == 0 {
+		start, step, version = start/int64(time.Second), step/int64(time.Second), 0
+	}
+	if int64(ts.Size()) > (math.MaxInt64-ts.time0)/int64(ts.step) {
+		return errors.New("timeseries: timestamp range overflows int64")
+	}
+	for _, v := range []int64{version, 0, int64(ts.Size()), int64(ts.Exp), start, step} {
 		if err := write(v); err != nil {
 			return err
 		}
@@ -40,8 +49,9 @@ func (ts *TimeSeries) BinaryEncode(w *bufio.Writer) error {
 	return nil
 }
 
-// BinaryDecode reads the original version-zero format. Invalid metadata,
-// unsupported versions, truncated input, and price overflow return errors.
+// BinaryDecode reads version-zero seconds and version-one nanoseconds.
+// Invalid metadata, unsupported versions, truncated input, and value overflow
+// return errors.
 // The receiver is changed only after the entire series has been decoded.
 func (ts *TimeSeries) BinaryDecode(r *bufio.Reader) error {
 	var header [6]int64
@@ -53,16 +63,23 @@ func (ts *TimeSeries) BinaryDecode(r *bufio.Reader) error {
 		header[i] = v
 	}
 	version, reserved, n, exp, time0, step := header[0], header[1], header[2], header[3], header[4], header[5]
-	if version != 0 || reserved != 0 {
+	if (version != 0 && version != 1) || reserved != 0 {
 		return fmt.Errorf("timeseries: unsupported format version %d or reserved field %d", version, reserved)
 	}
 	if n < 0 || n > int64(math.MaxInt) || time0 < 0 || step <= 0 || exp < -308 || exp > 308 {
 		return errors.New("timeseries: invalid series metadata")
 	}
+	if version == 0 {
+		if time0 > math.MaxInt64/int64(time.Second) || step > math.MaxInt64/int64(time.Second) {
+			return errors.New("timeseries: legacy timestamps overflow Unix nanoseconds")
+		}
+		time0 *= int64(time.Second)
+		step *= int64(time.Second)
+	}
 	if n > 0 && (n > math.MaxInt64/step || time0 > math.MaxInt64-n*step) {
 		return errors.New("timeseries: timestamp range overflows int64")
 	}
-	result := TimeSeries{Time0: time0, Step: step, Exp: int(exp), prices: make([]uint32, 0, int(min(n, 4096)))}
+	result := TimeSeries{time0: time0, step: time.Duration(step), Exp: int(exp), prices: make([]uint32, 0, int(min(n, 4096)))}
 	var previous int64
 	for i := int64(0); i < n; i++ {
 		delta, err := binary.ReadVarint(r)

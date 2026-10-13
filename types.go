@@ -1,48 +1,6 @@
 package timeseries
 
-import (
-	"fmt"
-	"math"
-	"strconv"
-)
-
-// Period is a sampling interval in seconds.
-type Period int64
-
-const (
-	Period1s Period = 1
-	Period1m        = 60 * Period1s
-	Period1h        = 60 * Period1m
-	Period4h        = 4 * Period1h
-	Period1D        = 24 * Period1h
-)
-
-func (p Period) String() string {
-	for _, unit := range []struct {
-		seconds Period
-		suffix  string
-	}{{Period1D, "d"}, {Period1h, "h"}, {Period1m, "m"}, {Period1s, "s"}} {
-		if p > 0 && p%unit.seconds == 0 {
-			return fmt.Sprintf("%d%s", p/unit.seconds, unit.suffix)
-		}
-	}
-	return fmt.Sprintf("%ds", p)
-}
-
-// PeriodByString parses a positive integer followed by s, m, h, or d.
-// It returns zero for invalid input.
-func PeriodByString(s string) Period {
-	if len(s) < 2 {
-		return 0
-	}
-	units := map[byte]int64{'s': 1, 'm': 60, 'h': 3600, 'd': 86400}
-	unit := units[s[len(s)-1]]
-	n, err := strconv.ParseInt(s[:len(s)-1], 10, 64)
-	if err != nil || unit == 0 || n <= 0 || n > math.MaxInt64/unit {
-		return 0
-	}
-	return Period(n * unit)
-}
+import "math"
 
 // PrecisionExp returns the original finance decimal exponent, ignoring
 // absolute floating-point differences of at most 1e-15. v must be finite.

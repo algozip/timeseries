@@ -1,10 +1,10 @@
-// Package timeseries provides compact, regularly spaced price series for
-// trading and backtesting. Prices are stored as uint32 values with a shared
-// decimal exponent; timestamps are derived from a start time and a fixed step.
+// Package timeseries provides compact, regularly spaced value series for
+// trading and backtesting. Values use uint32 storage with a shared decimal
+// exponent; timestamps are derived from an integer nanosecond start and step.
 //
-// Times are literal nonnegative Unix seconds; periods are durations in seconds.
-// A series stores one nonnegative value per interval. Series iteration is
-// stateless. A Cursor holds an independent position and moving-average caches
-// while sharing the series' data. Separate cursors may read immutable data
-// concurrently. Series mutation and sharing a cursor require synchronization.
+// Public time APIs use time.Time and time.Duration. All yields exact UTC
+// timestamps; AllUnix yields Unix seconds and offers an integer-only fast path
+// for whole-second steps. Series traversal is stateless. A Cursor holds
+// independent position, bounds, and average caches over shared data. Separate
+// cursors may read immutable data concurrently; mutation requires synchronization.
 package timeseries
