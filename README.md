@@ -59,6 +59,7 @@ func main() {
 | `Append(price)` | Add at `NextTime()`, rounding to the current precision. |
 | `Push(tick)` | Store `tick.Ask` in its interval; fill gaps with the preceding price and increase precision when needed. |
 | `All()` | Return an `iter.Seq2[int64, float64]` for ranging over timestamp-price pairs. |
+| `Range(from, to)` | Iterate sample timestamps in `[from, to)` using Unix seconds; zero bounds select the respective series boundary. |
 | `ValueOf(timestamp)` | Return the interval's price, or `math.NaN()` outside the series. |
 | `SeekTime(timestamp).Avg(seconds)` | Calculate a trailing simple moving average at the selected cursor. |
 | `Slice(from, to)` | Select sample timestamps in `[from, to)` as a shared, read-only view. |
@@ -85,6 +86,24 @@ your function, so `Avg` is available inside a backtest loop.
 the first sample; `break` stops iteration and leaves the cursor on the last
 visited sample. The existing `Iterator` callback method also supports ranging
 directly with `for timestamp, price := range prices.Iterator`.
+
+Use `Range(from, to)` to iterate between two dates. Convert `time.Time` values
+to Unix seconds with `.Unix()`:
+
+```go
+from := time.Unix(prices.Time0, 0)
+to := from.Add(24 * time.Hour)
+for timestamp, price := range prices.Range(from.Unix(), to.Unix()) {
+    fmt.Println(timestamp, price, prices.Avg(3600))
+}
+```
+
+The start is inclusive and the end is exclusive. Unaligned bounds select only
+sample timestamps inside the range; bounds outside the series are clamped.
+Empty or reversed ranges yield no samples. `Range(0, 0)` selects the whole
+series. `Avg` still uses the original series' earlier history, even when it
+precedes the selected range. Each traversal starts at the first matching sample,
+and `break` leaves the cursor on the last visited sample.
 
 `FetchMergedTimeSeries` requires matching steps and interval alignment. It leaves
 the input slice intact and reuses its callback's price slice; copy that slice if

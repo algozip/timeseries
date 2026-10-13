@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/denisskin/timeseries"
 )
@@ -18,6 +19,11 @@ func main() {
 
 	for timestamp, price := range prices.All() {
 		fmt.Printf("%d price=%.2f sma=%.4f\n", timestamp, price, prices.Avg(3*60))
+	}
+	from := time.Unix(start+60, 0)
+	to := from.Add(2 * time.Minute)
+	for timestamp, price := range prices.Range(from.Unix(), to.Unix()) {
+		fmt.Printf("Range: %d price=%.2f sma=%.4f\n", timestamp, price, prices.Avg(3*60))
 	}
 
 	dir, err := os.MkdirTemp("", "timeseries-example-*")

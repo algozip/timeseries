@@ -400,6 +400,32 @@ func (ts *TimeSeries) All() iter.Seq2[int64, float64] {
 	return ts.Iterator
 }
 
+// Range returns an iterator over samples with timestamps in [from, to).
+// Bounds are Unix timestamps in seconds; zero selects the respective series
+// boundary. Bounds outside the series are clamped. An empty or reversed range
+// yields no samples. Each traversal starts at the first sample in the range.
+// The cursor is updated before each yield, so Avg includes earlier history
+// outside the selected range. Breaking the loop stops iteration.
+// The loop body must not change the series' data or metadata.
+func (ts *TimeSeries) Range(from, to int64) iter.Seq2[int64, float64] {
+	return func(yield func(int64, float64) bool) {
+		ts.validate()
+		t1, t2 := from, to
+		if t1 == 0 {
+			t1 = ts.Time0
+		}
+		if t2 == 0 {
+			t2 = ts.NextTime()
+		}
+		for i, end := ts.bound(t1), ts.bound(t2); i < end; i++ {
+			ts.cur = i
+			if !yield(ts.Time0+int64(i)*ts.Step, ts.value(i)) {
+				return
+			}
+		}
+	}
+}
+
 // Iterator visits samples in time order and updates the cursor before each
 // callback. Returning false stops iteration. Go 1.23 supports range over this
 // method: for timestamp, price := range ts.Iterator { ... }.
@@ -422,16 +448,8 @@ func (ts *TimeSeries) Fetch(fn func(int64, float64)) {
 // FetchFromTo visits sample timestamps in [t1, t2). Zero bounds select the
 // respective series boundary. The callback must not mutate the series.
 func (ts *TimeSeries) FetchFromTo(t1, t2 int64, fn func(int64, float64)) {
-	ts.validate()
-	if t1 == 0 {
-		t1 = ts.Time0
-	}
-	if t2 == 0 {
-		t2 = ts.NextTime()
-	}
-	for i, end := ts.bound(t1), ts.bound(t2); i < end; i++ {
-		ts.cur = i
-		fn(ts.Time0+int64(i)*ts.Step, ts.value(i))
+	for timestamp, price := range ts.Range(t1, t2) {
+		fn(timestamp, price)
 	}
 }
 
