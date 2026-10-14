@@ -1,5 +1,9 @@
 # timeseries
 
+[![Go](https://github.com/algozip/timeseries/actions/workflows/go.yml/badge.svg?branch=main)](https://github.com/algozip/timeseries/actions/workflows/go.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/algozip/timeseries.svg)](https://pkg.go.dev/github.com/algozip/timeseries)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Compact, fixed-interval value time series for trading and backtesting in Go.
 
 ```sh
@@ -7,6 +11,9 @@ go get github.com/algozip/timeseries
 ```
 
 Requires Go 1.23 or later. No external dependencies.
+
+[API reference](https://pkg.go.dev/github.com/algozip/timeseries) ·
+[Example](examples/basic/main.go) · [Contributing](CONTRIBUTING.md)
 
 Values use `uint32` storage with a shared decimal exponent: **4 bytes per sample**
 for the value array. Timestamps are implicit. The API uses `time.Time` and
@@ -195,6 +202,10 @@ values follow the header.
 File extensions are not enforced. Cursor state is never serialized.
 
 ## Validation and benchmarks
+
+GitHub Actions builds, vets, and runs tests with the race detector on Linux,
+macOS, and Windows. Linux also checks Go 1.23 compatibility, the previous
+stable release, formatting, and module metadata.
 
 ```sh
 go test -race ./...
