@@ -2,7 +2,7 @@
 
 [![Go](https://github.com/algozip/timeseries/actions/workflows/go.yml/badge.svg?branch=main)](https://github.com/algozip/timeseries/actions/workflows/go.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/algozip/timeseries.svg)](https://pkg.go.dev/github.com/algozip/timeseries)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC_BY--NC_4.0-lightgrey.svg)](LICENSE)
 
 Compact, fixed-interval value time series for trading and backtesting in Go.
 
@@ -228,4 +228,17 @@ go test -run '^$' -bench . -benchmem .
 
 Extracted from `finance/finance/timeseries.go` into a standalone Go module.
 Exchange integration and application-specific database paths stay outside the
-package. MIT license.
+package.
+
+Copyright (c) 2026 Denis Glazov.
+
+The current version is licensed under the
+[Creative Commons Attribution-NonCommercial 4.0 International License](LICENSE)
+(SPDX: `CC-BY-NC-4.0`). Sharing and adaptation are permitted for noncommercial
+purposes under the license terms, including attribution, a license link, and
+an indication of changes. Commercial use requires separate permission from
+the copyright holder.
+
+This license change does not revoke permissions granted for previously
+published MIT versions, including releases through `v0.7.1` and commits before
+the license change. Those versions remain available under their original terms.
