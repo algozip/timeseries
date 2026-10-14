@@ -3,7 +3,7 @@
 Compact, fixed-interval value time series for trading and backtesting in Go.
 
 ```sh
-go get github.com/denisskin/timeseries
+go get github.com/algozip/timeseries
 ```
 
 Requires Go 1.23 or later. No external dependencies.
@@ -24,7 +24,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/denisskin/timeseries"
+    "github.com/algozip/timeseries"
 )
 
 func main() {

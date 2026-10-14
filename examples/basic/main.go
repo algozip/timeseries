@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/denisskin/timeseries"
+	"github.com/algozip/timeseries"
 )
 
 func main() {
