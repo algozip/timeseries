@@ -4,7 +4,7 @@ Open an issue for bug reports or API proposals. Include your Go version, OS,
 and a small reproduction for bugs. Discuss substantial API or storage-format
 changes before implementing them.
 
-Contributions are submitted under the project's CC BY-NC 4.0 license. Only
+Contributions are submitted under the project's Apache License 2.0. Only
 submit material you have the right to license under those terms.
 
 The module requires Go 1.23 or later and has no external dependencies. Keep
