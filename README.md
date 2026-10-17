@@ -4,7 +4,18 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/ztape/timeseries.svg)](https://pkg.go.dev/github.com/ztape/timeseries)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Compact, fixed-interval value time series for trading and backtesting in Go.
+A Go package optimized for large, fixed-interval time series in trading and
+backtesting, with efficient memory use, fast moving averages, and compact
+`.zts` files.
+
+- **Memory-efficient:** values occupy just **4 bytes per sample**, using `uint32`
+  storage with a shared decimal exponent. Timestamps are derived from the start
+  and interval instead of being stored for each sample.
+- **Fast moving averages:** cursors reuse a running sum for each window during
+  sequential traversal, avoiding repeated scans of the entire window.
+- **Compact files:** the **`.zts` format** is optimized for storing large time
+  series. It combines implicit timestamps, delta encoding, variable-length
+  integers, and gzip compression to reduce file size.
 
 ```sh
 go get github.com/ztape/timeseries
@@ -14,11 +25,6 @@ Requires Go 1.23 or later. No external dependencies.
 
 [API reference](https://pkg.go.dev/github.com/ztape/timeseries) ·
 [Example](examples/basic/main.go) · [Contributing](CONTRIBUTING.md)
-
-Values use `uint32` storage with a shared decimal exponent: **4 bytes per sample**
-for the value array. Timestamps are implicit. The API uses `time.Time` and
-`time.Duration`, while the start and interval are held privately as integer
-nanoseconds. Subsecond timestamps and intervals are preserved exactly.
 
 Run the included example with `go run ./examples/basic`.
 
