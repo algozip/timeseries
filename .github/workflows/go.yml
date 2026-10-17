@@ -67,3 +67,17 @@ jobs:
         run: go vet ./...
       - name: Test with race detector
         run: go test -race -count=1 ./...
+
+  index:
+    name: Publish version to Go proxy
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RELEASE_VERSION: ${{ github.ref_name }}
+    steps:
+      - name: Request module indexing
+        run: |
+          curl --fail --show-error --silent --retry 5 --retry-all-errors --retry-delay 10 --max-time 30 \
+            "https://proxy.golang.org/github.com/ztape/timeseries/@v/${RELEASE_VERSION}.info"
